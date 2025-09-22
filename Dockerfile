@@ -3,19 +3,26 @@ FROM golang:1.24.5-alpine AS go-builder
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies for building 
 RUN apk add --no-cache git ca-certificates
 
-# Copy go mod files
+# Copy go mod files first for better layer caching
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download && go mod verify
 
 # Copy source code
 COPY . .
 
-# Build applications
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o bin/gate cmd/gate/main.go
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o bin/console cmd/console/main.go
+# Build applications (CGO disabled for pure Go builds, fully static binaries)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -a -installsuffix cgo \
+    -ldflags='-w -s -extldflags "-static"' \
+    -o bin/gate cmd/gate/main.go
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -a -installsuffix cgo \
+    -ldflags='-w -s -extldflags "-static"' \
+    -o bin/console cmd/console/main.go
 
 # Build stage for Node.js frontend
 FROM node:20-alpine AS node-builder
@@ -30,11 +37,38 @@ RUN npm ci
 COPY ui/ ./
 RUN npm run build
 
-# Production stage
-FROM alpine:latest
+# Production stage - using scratch for minimal image size
+FROM scratch AS production
+
+# Copy CA certificates from builder
+COPY --from=go-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copy built applications
+COPY --from=go-builder /app/bin/gate /usr/local/bin/gate
+COPY --from=go-builder /app/bin/console /usr/local/bin/console
+
+# Copy frontend build
+COPY --from=node-builder /app/ui/dist /app/ui/dist
+
+# Copy configuration files
+COPY configs/ /etc/infra-core/configs/
+
+# Set environment variables
+ENV INFRA_CORE_ENV=production
+ENV INFRA_CORE_DATA_DIR=/var/lib/infra-core
+ENV INFRA_CORE_LOG_DIR=/var/log/infra-core
+
+# Expose ports
+EXPOSE 80 443 8082
+
+# Default command runs console
+ENTRYPOINT ["/usr/local/bin/console"]
+
+# Alternative production stage with Alpine (if you need shell access for debugging)
+FROM alpine:latest AS production-debug
 
 # Install runtime dependencies
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata wget
 
 # Create non-root user
 RUN addgroup -g 1001 -S infracore && \
