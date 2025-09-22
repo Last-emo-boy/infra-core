@@ -40,37 +40,62 @@ jobs:
         cache-dependency-path: ui/package-lock.json
     
     - name: Install Go dependencies
-      run: go mod download
+      run: |
+        go mod download
+        go mod verify
     
     - name: Install UI dependencies
       run: |
         cd ui
-        npm ci
-    
-    - name: Run Go tests
-      run: go test -v -race -coverprofile=coverage.out ./...
+        npm ci --prefer-offline
+        
+    - name: Run Go tests with detailed output
+      run: |
+        mkdir -p test-results
+        go test -v -race -coverprofile=coverage.out ./... 2>&1 | tee test-results/go-test.log
     
     - name: Run Go linting
-      uses: golangci/golangci-lint-action@v4
-      with:
-        version: latest
-        args: --timeout=5m
+      run: |
+        # Install golangci-lint if not cached
+        go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        golangci-lint run --timeout=5m --out-format=github-actions 2>&1 | tee test-results/golangci-lint.log
     
     - name: Build Go backend
       run: |
         mkdir -p bin
-        go build -ldflags="-s -w" -o bin/console cmd/console/main.go
-        go build -ldflags="-s -w" -o bin/gate cmd/gate/main.go
+        go build -ldflags="-s -w" -o bin/console cmd/console/main.go 2>&1 | tee test-results/go-build.log
+        go build -ldflags="-s -w" -o bin/gate cmd/gate/main.go 2>&1 | tee -a test-results/go-build.log
     
     - name: Build React frontend
       run: |
         cd ui
-        npm run build
+        npm run build 2>&1 | tee ../test-results/npm-build.log
     
     - name: Run frontend type check
       run: |
         cd ui
-        npm run type-check
+        npm run type-check 2>&1 | tee ../test-results/type-check.log
+    
+    - name: Upload test results and logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-and-logs-${{ github.run_number }}
+        path: |
+          test-results/
+          coverage.out
+          ~/.npm/_logs/
+        retention-days: 30
+        
+    - name: Upload build artifacts
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts-${{ github.run_number }}
+        path: |
+          bin/
+          ui/dist/
+        retention-days: 7
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4

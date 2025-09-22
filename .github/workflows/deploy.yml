@@ -83,6 +83,7 @@ jobs:
         tar -czf deployment-package.tar.gz deployment-package/
     
     - name: Deploy to server via SSH
+      id: deploy-step
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.SERVER_HOST }}
@@ -93,51 +94,132 @@ jobs:
         script: |
           set -e
           
+          # Create deployment log file
+          DEPLOY_LOG="/tmp/infra-core-deploy-$(date +%Y%m%d-%H%M%S).log"
+          echo "📋 Deployment started at $(date)" | tee "$DEPLOY_LOG"
+          
+          # Function to log with timestamp
+          log() {
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$DEPLOY_LOG"
+          }
+          
           # Create deployment directory
+          log "📁 Creating deployment directory..."
           sudo mkdir -p /tmp/infra-core-deploy
           cd /tmp/infra-core-deploy
           
           # Download deployment package from GitHub
-          echo "📥 Downloading deployment package..."
-          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          log "📥 Downloading deployment package..."
+          if curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                -H "Accept: application/vnd.github.v3.raw" \
                -L "https://api.github.com/repos/${{ github.repository }}/actions/artifacts" \
-               -o artifacts.json
+               -o artifacts.json; then
+            log "✅ Artifacts info downloaded"
+          else
+            log "⚠️ Failed to download artifacts, using git clone fallback"
+          fi
           
           # Alternative: Use git to get latest deployment scripts
           if [ ! -f deployment-package.tar.gz ]; then
-            echo "📂 Cloning repository for deployment scripts..."
-            git clone --depth 1 --branch ${{ steps.vars.outputs.branch }} \
-              https://github.com/${{ github.repository }}.git repo
-            
-            cd repo
-            cp server-deploy.sh quick-deploy.sh docker-compose.yml /tmp/infra-core-deploy/
-            cp -r configs /tmp/infra-core-deploy/
-            cd /tmp/infra-core-deploy
-            rm -rf repo
+            log "📂 Cloning repository for deployment scripts..."
+            if git clone --depth 1 --branch ${{ steps.vars.outputs.branch }} \
+              https://github.com/${{ github.repository }}.git repo; then
+              log "✅ Repository cloned successfully"
+              
+              cd repo
+              cp server-deploy.sh quick-deploy.sh docker-compose.yml /tmp/infra-core-deploy/
+              cp -r configs /tmp/infra-core-deploy/
+              cd /tmp/infra-core-deploy
+              rm -rf repo
+              log "✅ Deployment files copied"
+            else
+              log "❌ Failed to clone repository"
+              exit 1
+            fi
           fi
           
           # Make scripts executable
           chmod +x *.sh
+          log "✅ Scripts made executable"
           
           # Set environment variables for deployment
           export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
           export GITHUB_ACTOR="${{ github.actor }}"
           export DOCKER_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}"
           
-          # Run deployment
-          echo "🚀 Starting deployment..."
-          sudo -E ./server-deploy.sh \
+          # Run deployment with logging
+          log "🚀 Starting deployment..."
+          if sudo -E ./server-deploy.sh \
             --branch ${{ steps.vars.outputs.branch }} \
             --env ${{ steps.vars.outputs.environment }} \
             --docker \
-            --backup
+            --backup 2>&1 | tee -a "$DEPLOY_LOG"; then
+            log "✅ Deployment completed successfully!"
+          else
+            log "❌ Deployment failed!"
+            echo "=== DEPLOYMENT LOG ===" | tee -a "$DEPLOY_LOG"
+            tail -50 "$DEPLOY_LOG" | tee -a "$DEPLOY_LOG"
+            exit 1
+          fi
+          
+          # Save deployment info
+          echo "DEPLOYMENT_LOG=$DEPLOY_LOG" >> /tmp/deploy-info.env
+          echo "DEPLOYMENT_TIME=$(date -Iseconds)" >> /tmp/deploy-info.env
+          echo "DEPLOYMENT_SHA=${{ github.sha }}" >> /tmp/deploy-info.env
           
           # Cleanup
           cd /
           sudo rm -rf /tmp/infra-core-deploy
           
-          echo "✅ Deployment completed successfully!"
+          log "🎉 Deployment process completed!"
+
+    - name: Download deployment logs
+      if: always()
+      run: |
+        mkdir -p deployment-logs
+        echo "Deployment completed at: $(date)" > deployment-logs/deployment-summary.txt
+        echo "GitHub SHA: ${{ github.sha }}" >> deployment-logs/deployment-summary.txt
+        echo "Environment: ${{ steps.vars.outputs.environment }}" >> deployment-logs/deployment-summary.txt
+        echo "Branch: ${{ steps.vars.outputs.branch }}" >> deployment-logs/deployment-summary.txt
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}" >> deployment-logs/deployment-summary.txt
+        echo "Deploy Step Status: ${{ steps.deploy-step.outcome }}" >> deployment-logs/deployment-summary.txt
+
+    - name: Upload deployment logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-logs-${{ github.run_number }}
+        path: deployment-logs/
+        retention-days: 30
+
+    - name: Collect deployment logs
+      if: always()
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        port: ${{ secrets.SERVER_PORT || 22 }}
+        script: |
+          # Get deployment log info
+          if [ -f /tmp/deploy-info.env ]; then
+            source /tmp/deploy-info.env
+            if [ -f "$DEPLOYMENT_LOG" ]; then
+              echo "=== DEPLOYMENT LOG START ==="
+              cat "$DEPLOYMENT_LOG"
+              echo "=== DEPLOYMENT LOG END ==="
+              
+              # Copy log to a standard location for artifact collection
+              sudo cp "$DEPLOYMENT_LOG" /tmp/latest-deployment.log
+              sudo chmod 644 /tmp/latest-deployment.log
+            else
+              echo "❌ Deployment log file not found: $DEPLOYMENT_LOG"
+            fi
+          else
+            echo "❌ No deployment info file found"
+            echo "🔍 Checking for any deployment logs..."
+            ls -la /tmp/infra-core-deploy-*.log 2>/dev/null || echo "No deployment logs found"
+          fi
 
     - name: Verify deployment
       uses: appleboy/ssh-action@v1.0.3
@@ -201,7 +283,6 @@ jobs:
           }
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
-      if: ${{ secrets.SLACK_WEBHOOK != '' }}
 
   rollback:
     name: Rollback Deployment
