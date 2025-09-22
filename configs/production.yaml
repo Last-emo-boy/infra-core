@@ -1,0 +1,39 @@
+# Production Environment Configuration
+gate:
+  host: "0.0.0.0"
+  ports:
+    http: 80
+    https: 443
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/gate.log"
+  acme:
+    directory_url: "https://acme-v02.api.letsencrypt.org/directory"
+    email: "admin@last-emo-boy.com"
+    cache_dir: "/etc/infra-core/certs"
+    challenge_type: "http-01"
+    enabled: true
+
+console:
+  host: "0.0.0.0"
+  port: 8082
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/console.log"
+  database:
+    path: "/var/lib/infra-core/console.db"
+    wal_mode: true
+    timeout: "30s"
+  auth:
+    jwt:
+      secret: ""  # Must be set via environment variable
+      expires_hours: 8
+    session:
+      timeout_minutes: 30
+  cors:
+    enabled: true
+    origins: ["https://console.last-emo-boy.com"]
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    headers: ["Content-Type", "Authorization"]

@@ -1,0 +1,229 @@
+name: Deploy to Server
+
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
+      force_deploy:
+        description: 'Force deployment even if tests failed'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy:
+    name: Deploy to Linux Server
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
+    environment: ${{ inputs.environment || 'production' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup deployment variables
+      id: vars
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+        else
+          echo "environment=production" >> $GITHUB_OUTPUT
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+        fi
+        
+        # Set deployment branch
+        if [ "${{ steps.vars.outputs.environment }}" = "staging" ]; then
+          echo "branch=develop" >> $GITHUB_OUTPUT
+        else
+          echo "branch=main" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Create deployment package
+      run: |
+        mkdir -p deployment-package
+        
+        # Copy deployment scripts
+        cp server-deploy.sh deployment-package/
+        cp quick-deploy.sh deployment-package/
+        cp docker-compose.yml deployment-package/
+        cp -r configs deployment-package/
+        
+        # Create deployment configuration
+        cat > deployment-package/deploy-config.env << EOF
+        DEPLOYMENT_BRANCH=${{ steps.vars.outputs.branch }}
+        DEPLOYMENT_ENV=${{ steps.vars.outputs.environment }}
+        DOCKER_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}
+        GITHUB_SHA=${{ github.sha }}
+        GITHUB_REF=${{ github.ref }}
+        DEPLOYMENT_TIME=$(date -Iseconds)
+        EOF
+        
+        # Make scripts executable
+        chmod +x deployment-package/*.sh
+        
+        # Create deployment archive
+        tar -czf deployment-package.tar.gz deployment-package/
+    
+    - name: Deploy to server via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        port: ${{ secrets.SERVER_PORT || 22 }}
+        script_stop: true
+        script: |
+          set -e
+          
+          # Create deployment directory
+          sudo mkdir -p /tmp/infra-core-deploy
+          cd /tmp/infra-core-deploy
+          
+          # Download deployment package from GitHub
+          echo "📥 Downloading deployment package..."
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3.raw" \
+               -L "https://api.github.com/repos/${{ github.repository }}/actions/artifacts" \
+               -o artifacts.json
+          
+          # Alternative: Use git to get latest deployment scripts
+          if [ ! -f deployment-package.tar.gz ]; then
+            echo "📂 Cloning repository for deployment scripts..."
+            git clone --depth 1 --branch ${{ steps.vars.outputs.branch }} \
+              https://github.com/${{ github.repository }}.git repo
+            
+            cd repo
+            cp server-deploy.sh quick-deploy.sh docker-compose.yml /tmp/infra-core-deploy/
+            cp -r configs /tmp/infra-core-deploy/
+            cd /tmp/infra-core-deploy
+            rm -rf repo
+          fi
+          
+          # Make scripts executable
+          chmod +x *.sh
+          
+          # Set environment variables for deployment
+          export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          export GITHUB_ACTOR="${{ github.actor }}"
+          export DOCKER_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}"
+          
+          # Run deployment
+          echo "🚀 Starting deployment..."
+          sudo -E ./server-deploy.sh \
+            --branch ${{ steps.vars.outputs.branch }} \
+            --env ${{ steps.vars.outputs.environment }} \
+            --docker \
+            --backup
+          
+          # Cleanup
+          cd /
+          sudo rm -rf /tmp/infra-core-deploy
+          
+          echo "✅ Deployment completed successfully!"
+
+    - name: Verify deployment
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        port: ${{ secrets.SERVER_PORT || 22 }}
+        script: |
+          echo "🔍 Verifying deployment..."
+          
+          # Wait for services to be ready
+          sleep 10
+          
+          # Check service status
+          sudo /opt/infra-core/current/server-deploy.sh --status
+          
+          # Test health endpoint
+          if curl -f http://localhost:8082/api/v1/health; then
+            echo "✅ Health check passed"
+          else
+            echo "❌ Health check failed"
+            exit 1
+          fi
+          
+          echo "🎉 Deployment verification completed!"
+
+    - name: Notify deployment status
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        channel: '#deployments'
+        username: 'GitHub Actions'
+        icon_emoji: ':rocket:'
+        fields: repo,message,commit,author,action,eventName,ref,workflow
+        custom_payload: |
+          {
+            "text": "${{ job.status == 'success' && '✅' || '❌' }} Deployment ${{ job.status }}",
+            "attachments": [{
+              "color": "${{ job.status == 'success' && 'good' || 'danger' }}",
+              "fields": [{
+                "title": "Environment",
+                "value": "${{ steps.vars.outputs.environment }}",
+                "short": true
+              }, {
+                "title": "Branch",
+                "value": "${{ steps.vars.outputs.branch }}",
+                "short": true
+              }, {
+                "title": "Commit",
+                "value": "${{ github.sha }}",
+                "short": true
+              }, {
+                "title": "Image",
+                "value": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}",
+                "short": false
+              }]
+            }]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+      if: ${{ secrets.SLACK_WEBHOOK != '' }}
+
+  rollback:
+    name: Rollback Deployment
+    runs-on: ubuntu-latest
+    if: failure() && needs.deploy.result == 'failure'
+    needs: deploy
+    
+    steps:
+    - name: Rollback to previous version
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        port: ${{ secrets.SERVER_PORT || 22 }}
+        script: |
+          echo "🔄 Rolling back deployment..."
+          
+          if [ -f /opt/infra-core/current/server-deploy.sh ]; then
+            sudo /opt/infra-core/current/server-deploy.sh --rollback
+            echo "✅ Rollback completed"
+          else
+            echo "❌ Rollback script not found"
+            exit 1
+          fi

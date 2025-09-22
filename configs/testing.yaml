@@ -1,0 +1,39 @@
+# Testing Environment Configuration
+gate:
+  host: "localhost"
+  ports:
+    http: 18080
+    https: 18443
+  logs:
+    level: "warn"
+    console: true
+    file: "./log/gate-test.log"
+  acme:
+    directory_url: "https://acme-staging-v02.api.letsencrypt.org/directory"
+    email: "test@last-emo-boy.local"
+    cache_dir: "./certs-test"
+    challenge_type: "http-01"
+    enabled: false
+
+console:
+  host: "localhost"
+  port: 18082
+  logs:
+    level: "warn"
+    console: true
+    file: "./log/console-test.log"
+  database:
+    path: ":memory:"  # In-memory database for testing
+    wal_mode: false
+    timeout: "5s"
+  auth:
+    jwt:
+      secret: "test-secret-key-for-testing-only"
+      expires_hours: 1
+    session:
+      timeout_minutes: 15
+  cors:
+    enabled: true
+    origins: ["http://localhost:3001"]
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    headers: ["Content-Type", "Authorization"]

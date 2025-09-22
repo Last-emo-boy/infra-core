@@ -1,0 +1,66 @@
+# Infra-Core Configuration File
+# This file contains the main configuration for all components
+
+# Global settings
+data_dir: "./data"
+log_level: "info"  # debug, info, warn, error
+environment: "development"  # development, production
+
+# Database configuration
+database:
+  path: "./data/infra-core.db"
+  wal_mode: true
+  max_conns: 10
+  backup_path: "./data/backups"
+
+# Gate (reverse proxy) configuration
+gate:
+  http_port: 8080
+  https_port: 8443
+  metrics_port: 9090
+  cert_dir: "./data/certs"
+  acme_email: ""  # Leave empty to disable ACME
+  acme_staging: true  # Set to true for testing
+
+# Orchestrator configuration
+orch:
+  container_runtime: "containerd"  # containerd, docker
+  data_root: "./data/containers"
+  log_dir: "./data/logs"
+  health_check_retry: 3
+
+# Console (web UI) configuration
+console:
+  port: 8082
+  static_dir: "./ui/dist"
+  production: false  # Enable production mode (disable debug)
+  jwt:
+    secret: ""  # Will be auto-generated if empty
+    expiration_hours: 24
+  session:
+    key: ""  # Will be auto-generated if empty
+    max_age: 3600  # Session timeout in seconds
+  default_admin:
+    username: "admin"
+    password: "admin123"  # Change this in production!
+    email: "admin@example.com"
+
+# Probe (metrics) configuration
+probe:
+  interval: "5s"
+  port: 9091
+  metrics_retention: "15d"
+
+# Snap (backup) configuration
+snap:
+  repo_dir: "./data/snapshots"
+  temp_dir: "./tmp/infra-core-snap"
+  compression: true
+  chunk_size: "4MB"
+
+# Security configuration
+security:
+  tls_min_version: "1.2"
+  allowed_hosts: []
+  csp_policy: "default-src 'self'"
+  rate_limit: 100  # requests per minute

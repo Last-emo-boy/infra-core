@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  infra-core:
+    build: .
+    container_name: infra-core
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8082:8082"
+    volumes:
+      - infra_data:/var/lib/infra-core
+      - infra_logs:/var/log/infra-core
+      - ./certs:/etc/infra-core/certs
+      - /var/run/docker.sock:/var/run/docker.sock  # For container management
+    environment:
+      - INFRA_CORE_ENV=production
+      - INFRA_CORE_JWT_SECRET=${JWT_SECRET:-}
+      - INFRA_CORE_ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+    networks:
+      - infra-network
+    depends_on:
+      - watchtower
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 3600 --cleanup
+    networks:
+      - infra-network
+
+volumes:
+  infra_data:
+    driver: local
+  infra_logs:
+    driver: local
+
+networks:
+  infra-network:
+    driver: bridge

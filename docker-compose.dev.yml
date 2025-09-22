@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  infra-core-dev:
+    build: 
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: infra-core-dev
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+      - "8082:8082"
+      - "5173:5173"  # Vite dev server
+    volumes:
+      - .:/app
+      - dev_data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - INFRA_CORE_ENV=development
+      - INFRA_CORE_LOG_LEVEL=debug
+    networks:
+      - infra-dev-network
+    working_dir: /app
+    command: >
+      sh -c "
+        # Start backend
+        go run cmd/console/main.go &
+        # Start frontend dev server
+        cd ui && npm run dev -- --host 0.0.0.0
+      "
+
+volumes:
+  dev_data:
+    driver: local
+
+networks:
+  infra-dev-network:
+    driver: bridge

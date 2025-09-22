@@ -1,0 +1,26 @@
+# Development Dockerfile
+FROM golang:1.24.5-alpine AS dev
+
+# Install development dependencies
+RUN apk add --no-cache git ca-certificates curl nodejs npm
+
+WORKDIR /app
+
+# Install Go tools
+RUN go install github.com/air-verse/air@latest
+
+# Copy package files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY ui/package*.json ui/
+RUN cd ui && npm install
+
+# Copy the rest of the application
+COPY . .
+
+# Expose ports
+EXPOSE 8080 8443 8082 5173
+
+# Default command for development
+CMD ["air", "-c", ".air.toml"]

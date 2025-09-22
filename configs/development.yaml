@@ -1,0 +1,39 @@
+# Development Environment Configuration
+gate:
+  host: "localhost"
+  ports:
+    http: 8080
+    https: 8443
+  logs:
+    level: "debug"
+    console: true
+    file: "./log/gate-dev.log"
+  acme:
+    directory_url: "https://acme-staging-v02.api.letsencrypt.org/directory"
+    email: "dev@last-emo-boy.local"
+    cache_dir: "./certs-dev"
+    challenge_type: "http-01"
+    enabled: false  # Disable ACME in development
+
+console:
+  host: "localhost"
+  port: 8082
+  logs:
+    level: "debug"
+    console: true
+    file: "./log/console-dev.log"
+  database:
+    path: "./data/dev-console.db"
+    wal_mode: true
+    timeout: "30s"
+  auth:
+    jwt:
+      secret: ""  # Auto-generated in development
+      expires_hours: 24
+    session:
+      timeout_minutes: 60
+  cors:
+    enabled: true
+    origins: ["http://localhost:3000", "http://localhost:5173"]
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    headers: ["Content-Type", "Authorization"]
