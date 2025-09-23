@@ -1,0 +1,586 @@
+name: CICD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type (only for main branch)'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none        # 不创建发布
+          - patch       # 0.1.0 -> 0.1.1
+          - minor       # 0.1.0 -> 0.2.0
+          - major       # 0.1.0 -> 1.0.0 (正式版)
+          - prerelease  # 0.1.0 -> 0.1.1-beta.0
+          - beta        # 0.1.0-beta.0 -> 0.1.0-beta.1
+          - alpha       # 0.1.0 -> 0.1.1-alpha.0
+      deploy_environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto        # 根据分支自动选择
+          - staging     # 强制部署到staging
+          - production  # 强制部署到production
+          - none        # 不部署
+
+env:
+  GO_VERSION: '1.21'
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    name: Test & Quality Checks
+    runs-on: ubuntu-latest
+    
+    services:
+      docker:
+        image: docker:24-dind
+        options: --privileged
+    
+    outputs:
+      coverage: ${{ steps.coverage.outputs.coverage }}
+      test-status: ${{ steps.test.outcome }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # 需要完整历史用于版本控制
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: ui/package-lock.json
+    
+    - name: Install dependencies
+      run: |
+        # Go dependencies
+        go mod download
+        go mod verify
+        
+        # Frontend dependencies
+        cd ui
+        npm ci --prefer-offline
+    
+    - name: Run tests
+      id: test
+      run: |
+        mkdir -p test-results
+        
+        # Go tests with coverage
+        go test -v -race -coverprofile=coverage.out ./... 2>&1 | tee test-results/go-test.log
+        
+        # Frontend type checking
+        cd ui
+        npm run type-check 2>&1 | tee ../test-results/type-check.log
+        cd ..
+    
+    - name: Check coverage
+      id: coverage
+      run: |
+        if [ -f coverage.out ]; then
+          coverage=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "coverage=$coverage" >> $GITHUB_OUTPUT
+          echo "Coverage: $coverage%"
+          
+          if (( $(echo "$coverage < 60" | bc -l) )); then
+            echo "❌ Coverage $coverage% is below 60% threshold"
+            exit 1
+          else
+            echo "✅ Coverage $coverage% meets threshold"
+          fi
+        else
+          echo "coverage=0" >> $GITHUB_OUTPUT
+          echo "❌ No coverage data found"
+          exit 1
+        fi
+    
+    - name: Go linting
+      run: |
+        go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        golangci-lint run --timeout=5m --out-format=github-actions 2>&1 | tee test-results/golangci-lint.log
+    
+    - name: Security scan
+      run: |
+        go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+        gosec -no-fail -fmt sarif -out test-results/gosec-results.sarif ./...
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ github.run_number }}
+        path: |
+          test-results/
+          coverage.out
+        retention-days: 30
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.out
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+    
+    - name: Upload security scan results
+      if: always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: test-results/gosec-results.sarif
+
+  build:
+    name: Build Applications
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request'
+    
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux  
+            arch: arm64
+          - os: windows
+            arch: amd64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: ui/package-lock.json
+    
+    - name: Build frontend
+      if: matrix.os == 'linux' && matrix.arch == 'amd64'
+      run: |
+        cd ui
+        npm ci
+        npm run build
+        tar -czf ../frontend-dist.tar.gz -C dist .
+    
+    - name: Build Go binaries
+      env:
+        GOOS: ${{ matrix.os }}
+        GOARCH: ${{ matrix.arch }}
+      run: |
+        mkdir -p dist
+        
+        # Build binaries for each cmd
+        for cmd in cmd/*; do
+          if [ -d "$cmd" ]; then
+            binary_name=$(basename "$cmd")
+            if [ "${{ matrix.os }}" = "windows" ]; then
+              binary_name="${binary_name}.exe"
+            fi
+            
+            echo "Building $binary_name for ${{ matrix.os }}/${{ matrix.arch }}"
+            go build -ldflags="-s -w -X main.version=${{ github.sha }}" \
+              -o "dist/${binary_name}-${{ matrix.os }}-${{ matrix.arch }}" \
+              "./$cmd"
+          fi
+        done
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+        path: |
+          dist/
+          frontend-dist.tar.gz
+        retention-days: 7
+
+  docker:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    if: github.event_name != 'pull_request'
+    
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    
+    outputs:
+      image-digest: ${{ steps.push.outputs.digest }}
+      image-tags: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=sha,prefix=sha-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      id: push
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_VERSION=${{ github.sha }}
+          BUILD_TIME=${{ github.run_number }}
+    
+    - name: Generate artifact attestation
+      uses: actions/attest-build-provenance@v1
+      with:
+        subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
+        subject-digest: ${{ steps.push.outputs.digest }}
+        push-to-registry: true
+
+  security-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    needs: docker
+    if: github.event_name != 'pull_request'
+    
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+      continue-on-error: true
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # 自动预发布 (仅main分支推送，非手动触发)
+  auto-prerelease:
+    name: Auto Pre-release
+    runs-on: ubuntu-latest
+    needs: [test, build, docker]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && !contains(github.event.head_commit.message, 'chore(release)')
+    
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Install release tools
+      run: npm install -g standard-version
+    
+    - name: Configure Git
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+    
+    - name: Create auto pre-release
+      id: auto_release
+      run: |
+        # 创建自动beta预发布版本
+        standard-version --prerelease beta --skip.changelog --skip.commit --skip.tag
+        version=$(cat VERSION)
+        echo "version=v$version" >> $GITHUB_OUTPUT
+        echo "Created auto pre-release: v$version"
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: dist/
+    
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        for dir in dist/binaries-*/; do
+          if [ -d "$dir" ]; then
+            platform=$(basename "$dir" | sed 's/binaries-//')
+            cd "$dir"
+            tar -czf "../../release-assets/infra-core-${platform}.tar.gz" *
+            cd ../..
+          fi
+        done
+    
+    - name: Create GitHub Pre-release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.auto_release.outputs.version }}
+        name: Pre-release ${{ steps.auto_release.outputs.version }}
+        body: |
+          🚀 **Automated Pre-release**
+          
+          This is an automated pre-release build from the latest main branch.
+          
+          **Changes in this build:**
+          - Latest commits from main branch
+          - All tests passing ✅
+          - Code quality checks passed ✅
+          - Security scans completed ✅
+          
+          **⚠️ This is a pre-release version**
+          - Use for testing and development only
+          - May contain unstable features
+          - Not recommended for production use
+          
+          For stable releases, see the [releases page](https://github.com/${{ github.repository }}/releases).
+        files: release-assets/*
+        draft: false
+        prerelease: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 手动发布 (仅手动触发)
+  manual-release:
+    name: Manual Release
+    runs-on: ubuntu-latest
+    needs: [test, build, docker]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.release_type != 'none'
+    
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Install release tools
+      run: npm install -g standard-version
+    
+    - name: Configure Git
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: dist/
+    
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        for dir in dist/binaries-*/; do
+          if [ -d "$dir" ]; then
+            platform=$(basename "$dir" | sed 's/binaries-//')
+            cd "$dir"
+            tar -czf "../../release-assets/infra-core-${platform}.tar.gz" *
+            cd ../..
+          fi
+        done
+    
+    - name: Create release
+      id: release
+      run: |
+        case "${{ inputs.release_type }}" in
+          "alpha")
+            standard-version --prerelease alpha
+            ;;
+          "beta")
+            standard-version --prerelease beta
+            ;;
+          "prerelease")
+            standard-version --prerelease
+            ;;
+          "patch")
+            standard-version --release-as patch
+            ;;
+          "minor")
+            standard-version --release-as minor
+            ;;
+          "major")
+            # 这是从0.x.x到1.0.0的重大版本升级
+            standard-version --release-as major
+            ;;
+        esac
+        
+        version=$(git describe --tags --abbrev=0)
+        echo "version=$version" >> $GITHUB_OUTPUT
+    
+    - name: Push changes
+      run: |
+        git push --follow-tags origin main
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.release.outputs.version }}
+        name: Release ${{ steps.release.outputs.version }}
+        body_path: CHANGELOG.md
+        files: release-assets/*
+        draft: false
+        prerelease: ${{ contains(steps.release.outputs.version, '-') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 部署到staging (develop分支或手动选择)
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [test, docker]
+    if: |
+      (github.ref == 'refs/heads/develop') || 
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_environment == 'staging') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_environment == 'auto' && github.ref == 'refs/heads/develop')
+    
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Deploy to staging
+      run: |
+        echo "🚀 Deploying to staging environment"
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop"
+        echo "Coverage: ${{ needs.test.outputs.coverage }}%"
+        # 这里添加你的staging部署逻辑
+
+  # 部署到production (main分支或手动选择)
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [test, docker, security-scan]
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name != 'workflow_dispatch') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_environment == 'production') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_environment == 'auto' && github.ref == 'refs/heads/main')
+    
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Create deployment package
+      run: |
+        mkdir -p deployment
+        cp docker-compose.yml deployment/ 2>/dev/null || echo "docker-compose.yml not found"
+        cp -r configs deployment/ 2>/dev/null || echo "configs directory not found"
+        echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}" > deployment/image-tag.txt
+        tar -czf infra-core-deployment.tar.gz deployment/
+    
+    - name: Upload deployment artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-package-${{ github.run_number }}
+        path: infra-core-deployment.tar.gz
+        retention-days: 30
+    
+    - name: Deploy to production
+      if: vars.SERVER_HOST != ''
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        port: ${{ secrets.SERVER_PORT || 22 }}
+        script: |
+          echo "🚀 Starting production deployment..."
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}"
+          echo "Coverage: ${{ needs.test.outputs.coverage }}%"
+          # 这里添加你的production部署逻辑
+          echo "✅ Production deployment completed"
+
+  # 通知和报告
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [test, build, docker, auto-prerelease, manual-release, deploy-staging, deploy-production]
+    if: always() && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Summary
+      run: |
+        echo "## 🎯 CICD Pipeline Summary"
+        echo "**Branch**: ${{ github.ref_name }}"
+        echo "**Commit**: ${{ github.sha }}"
+        echo "**Coverage**: ${{ needs.test.outputs.coverage }}%"
+        echo "**Test Status**: ${{ needs.test.outputs.test-status }}"
+        
+        if [ "${{ needs.auto-prerelease.result }}" == "success" ]; then
+          echo "✅ Auto pre-release created"
+        elif [ "${{ needs.manual-release.result }}" == "success" ]; then
+          echo "✅ Manual release created"
+        fi
+        
+        if [ "${{ needs.deploy-production.result }}" == "success" ]; then
+          echo "✅ Production deployment successful"
+        elif [ "${{ needs.deploy-staging.result }}" == "success" ]; then
+          echo "✅ Staging deployment successful"
+        fi

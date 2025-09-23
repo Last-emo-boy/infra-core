@@ -26,17 +26,18 @@ if ($LASTEXITCODE -ne 0) {
 
 # 触发工作流
 try {
-    gh workflow run "Release Management" `
+    gh workflow run "CICD Pipeline" `
         --ref $Branch `
-        --field release_type=$ReleaseType
+        --field release_type=$ReleaseType `
+        --field deploy_environment=auto
     
-    Write-Host "✅ Release workflow triggered successfully!" -ForegroundColor Green
+    Write-Host "✅ CICD Pipeline triggered successfully!" -ForegroundColor Green
     Write-Host "📝 Check progress at: https://github.com/$(gh repo view --json owner,name --jq '.owner.login + "/" + .name')/actions" -ForegroundColor Yellow
     
     # 等待几秒钟然后显示最新的工作流运行
     Start-Sleep 3
     Write-Host "`n📊 Recent workflow runs:" -ForegroundColor Cyan
-    gh run list --workflow="Release Management" --limit=3
+    gh run list --workflow="CICD Pipeline" --limit=3
 }
 catch {
     Write-Error "Failed to trigger workflow: $_"

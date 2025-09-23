@@ -1,14 +1,28 @@
-# 快速发布脚本使用说明
+# 统一CICD发布指南
 
-## 🚀 手动触发发布的三种方法
+## 🚀 新的统一CICD流程
+
+### 工作流合并说明
+已将原来的三个workflow（CI/CD、Deploy、Release Management）合并为一个统一的 **CICD Pipeline**，具备以下功能：
+
+- ✅ **持续集成**: 测试、构建、代码质量检查
+- ✅ **持续部署**: 自动部署到staging/production环境  
+- ✅ **发布管理**: 自动和手动发布控制
+- ✅ **容器化**: Docker镜像构建和推送
+- ✅ **安全扫描**: 代码和容器安全检查
+
+## 🎛️ 手动触发发布的方法
 
 ### 方法1: GitHub网页界面 (推荐)
 1. 访问: https://github.com/Last-emo-boy/infra-core/actions
-2. 选择 "Release Management" 工作流
-3. 点击 "Run workflow" 按钮
-4. 选择发布类型后点击 "Run workflow"
+2. 选择 **"CICD Pipeline"** 工作流
+3. 点击 **"Run workflow"** 按钮
+4. 配置参数：
+   - **release_type**: 选择发布类型 (patch/minor/major/beta/alpha)
+   - **deploy_environment**: 选择部署环境 (auto/staging/production/none)
+5. 点击 **"Run workflow"** 执行
 
-### 方法2: 使用提供的PowerShell脚本
+### 方法2: 使用PowerShell脚本 (已更新)
 ```powershell
 # 在项目根目录运行
 ./scripts/release.ps1 -ReleaseType patch    # Bug修复: 0.1.0 → 0.1.1
@@ -18,15 +32,18 @@
 ./scripts/release.ps1 -ReleaseType alpha    # Alpha测试: 0.1.0 → 0.1.1-alpha.0
 ```
 
-### 方法3: 直接使用GitHub CLI
+### 方法3: 直接使用GitHub CLI (已更新)
 ```powershell
-# 需要先安装GitHub CLI: winget install GitHub.cli
-gh workflow run "Release Management" --ref main --field release_type=patch
+# 发布新版本
+gh workflow run "CICD Pipeline" --ref main --field release_type=patch --field deploy_environment=auto
+
+# 仅部署不发布
+gh workflow run "CICD Pipeline" --ref main --field release_type=none --field deploy_environment=production
 ```
 
-## 📊 版本号累计示例
+## 📊 版本号累计规则 (已重置)
 
-### 当前状态: 0.1.0
+### 当前状态: 0.1.0 ✅
 
 #### Patch发布 (修复bug)
 ```
@@ -55,12 +72,27 @@ gh workflow run "Release Management" --ref main --field release_type=patch
 每次推送 → 0.x.y-beta.z (自动递增)
 ```
 
+## 🔄 自动化流程说明
+
+### 自动触发条件
+| 触发条件 | 执行操作 |
+|---------|---------|
+| 推送到 `main` 分支 | 测试 → 构建 → 自动预发布 → 部署production |
+| 推送到 `develop` 分支 | 测试 → 构建 → 部署staging |
+| 创建Pull Request | 仅测试和代码质量检查 |
+| 手动触发 | 根据参数执行相应操作 |
+
+### 部署策略
+- **develop分支** → 自动部署到 **staging**
+- **main分支** → 自动部署到 **production** 
+- **手动触发** → 可选择任意环境
+
 ## 🎯 实际使用流程
 
 ### 日常开发
-1. **开发功能** → 推送到main → 自动生成beta版本
-2. **准备发布** → 手动触发对应类型的发布
-3. **版本号自动累计** → 无需手动管理
+1. **开发功能** → 推送到develop → 自动部署staging测试
+2. **合并到main** → 自动生成beta预发布 + 部署production
+3. **准备发布** → 手动触发对应类型的正式发布
 
 ### 发布决策
 - **修复bug**: 选择 `patch`
@@ -71,18 +103,36 @@ gh workflow run "Release Management" --ref main --field release_type=patch
 ## 📝 快速命令参考
 
 ```powershell
-# 查看当前版本
+# 查看当前版本和标签状态
 Get-Content VERSION
+git tag -l | Sort-Object
+
+# 查看workflow状态
+gh run list --workflow="CICD Pipeline"
+
+# 触发不同类型的发布
+./scripts/release.ps1 -ReleaseType patch      # 0.1.0 → 0.1.1
+./scripts/release.ps1 -ReleaseType minor      # 0.1.0 → 0.2.0
+./scripts/release.ps1 -ReleaseType major      # 0.1.0 → 1.0.0
+./scripts/release.ps1 -ReleaseType beta       # 0.1.0 → 0.1.1-beta.0
 
 # 查看发布历史
-gh release list
-
-# 查看工作流状态
-gh run list --workflow="Release Management"
-
-# 触发发布 (选择其中一个)
-./scripts/release.ps1 -ReleaseType patch
-./scripts/release.ps1 -ReleaseType minor
-./scripts/release.ps1 -ReleaseType major
-./scripts/release.ps1 -ReleaseType beta
+gh release list --limit 10
 ```
+
+## ⚡ 主要改进
+
+### 工作流统一
+- ✅ **一个workflow搞定所有**: 测试、构建、发布、部署
+- ✅ **智能触发**: 根据分支和事件自动选择操作
+- ✅ **灵活配置**: 手动触发时可精确控制
+
+### 版本控制重置
+- ✅ **版本号已重置**: 从0.1.0开始
+- ✅ **标签已清理**: 删除v4-v7，创建v0.1.0
+- ✅ **配置已优化**: 支持0.x.x预发布格式
+
+### 部署优化
+- ✅ **环境分离**: staging和production独立部署
+- ✅ **自动部署**: 根据分支自动选择环境
+- ✅ **手动控制**: 支持强制指定部署环境
