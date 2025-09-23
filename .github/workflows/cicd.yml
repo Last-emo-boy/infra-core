@@ -461,7 +461,7 @@ jobs:
         tag_name: ${{ steps.release.outputs.version }}
         name: ${{ steps.detect.outputs.release-type == 'beta' && 'Pre-release' || 'Release' }} ${{ steps.release.outputs.version }}
         body: |
-          🚀 **Smart Release - ${{ steps.detect.outputs.release-type | upper }}**
+          🚀 **Smart Release - ${{ steps.detect.outputs.release-type }}**
           
           This release was automatically created based on commit message analysis:
           
