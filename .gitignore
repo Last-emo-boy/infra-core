@@ -13,6 +13,14 @@ dist/
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+# Coverage reports
+coverage.out
+coverage.html
+coverage.txt
+coverage/
+cover.out
+c.out
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

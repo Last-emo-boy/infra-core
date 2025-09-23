@@ -1,0 +1,86 @@
+{
+  "header": "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n",
+  "types": [
+    {
+      "type": "feat",
+      "section": "✨ Features",
+      "hidden": false
+    },
+    {
+      "type": "fix",
+      "section": "🐛 Bug Fixes",
+      "hidden": false
+    },
+    {
+      "type": "perf",
+      "section": "⚡ Performance Improvements",
+      "hidden": false
+    },
+    {
+      "type": "refactor",
+      "section": "♻️ Code Refactoring",
+      "hidden": false
+    },
+    {
+      "type": "test",
+      "section": "✅ Tests",
+      "hidden": false
+    },
+    {
+      "type": "docs",
+      "section": "📚 Documentation",
+      "hidden": false
+    },
+    {
+      "type": "build",
+      "section": "👷 Build System",
+      "hidden": false
+    },
+    {
+      "type": "ci",
+      "section": "💚 CI/CD",
+      "hidden": false
+    },
+    {
+      "type": "style",
+      "section": "🎨 Styles",
+      "hidden": true
+    },
+    {
+      "type": "chore",
+      "section": "🧹 Chores",
+      "hidden": true
+    }
+  ],
+  "releaseCommitMessageFormat": "chore(release): {{currentTag}}",
+  "scripts": {
+    "prerelease": "echo 'Preparing pre-release...'",
+    "postrelease": "echo 'Pre-release completed!'"
+  },
+  "skip": {
+    "bump": false,
+    "changelog": false,
+    "commit": false,
+    "tag": false
+  },
+  "tagPrefix": "v",
+  "commitUrlFormat": "{{host}}/{{owner}}/{{repository}}/commit/{{hash}}",
+  "compareUrlFormat": "{{host}}/{{owner}}/{{repository}}/compare/{{previousTag}}...{{currentTag}}",
+  "issueUrlFormat": "{{host}}/{{owner}}/{{repository}}/issues/{{id}}",
+  "userUrlFormat": "{{host}}/{{user}}",
+  "releaseAs": "patch",
+  "preset": "conventionalcommits",
+  "prerelease": "beta",
+  "packageFiles": [
+    {
+      "filename": "VERSION",
+      "type": "plain-text"
+    }
+  ],
+  "bumpFiles": [
+    {
+      "filename": "VERSION",
+      "type": "plain-text"
+    }
+  ]
+}
