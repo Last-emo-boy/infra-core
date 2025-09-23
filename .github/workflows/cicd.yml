@@ -313,15 +313,20 @@ jobs:
       with:
         sarif_file: 'trivy-results.sarif'
 
-  # 自动预发布 (仅main分支推送，非手动触发)
-  auto-prerelease:
-    name: Auto Pre-release
+  # 智能版本发布 (基于commit消息自动检测类型)
+  smart-release:
+    name: Smart Release
     runs-on: ubuntu-latest
     needs: [test, build, docker]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push' && !contains(github.event.head_commit.message, 'chore(release)')
     
     permissions:
       contents: write
+    
+    outputs:
+      release-type: ${{ steps.detect.outputs.release-type }}
+      version: ${{ steps.release.outputs.version }}
+      should-release: ${{ steps.detect.outputs.should-release }}
     
     steps:
     - name: Checkout code
@@ -343,21 +348,96 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
     
-    - name: Create auto pre-release
-      id: auto_release
+    - name: Detect release type from commit
+      id: detect
       run: |
-        # 创建自动beta预发布版本
-        standard-version --prerelease beta --skip.changelog --skip.commit --skip.tag
-        version=$(cat VERSION)
-        echo "version=v$version" >> $GITHUB_OUTPUT
-        echo "Created auto pre-release: v$version"
+        # 获取最新的commit消息
+        COMMIT_MSG="${{ github.event.head_commit.message }}"
+        echo "Commit message: $COMMIT_MSG"
+        
+        # 默认为beta预发布
+        RELEASE_TYPE="beta"
+        SHOULD_RELEASE="true"
+        
+        # 基于commit消息检测发布类型
+        if echo "$COMMIT_MSG" | grep -qE "^feat!:|^fix!:|BREAKING CHANGE|^major:"; then
+          RELEASE_TYPE="major"
+          echo "🚀 Detected MAJOR release (breaking change)"
+        elif echo "$COMMIT_MSG" | grep -qE "^feat:|^feature:|^minor:"; then
+          RELEASE_TYPE="minor" 
+          echo "✨ Detected MINOR release (new feature)"
+        elif echo "$COMMIT_MSG" | grep -qE "^fix:|^bugfix:|^patch:"; then
+          RELEASE_TYPE="patch"
+          echo "🐛 Detected PATCH release (bug fix)"
+        elif echo "$COMMIT_MSG" | grep -qE "^alpha:|alpha"; then
+          RELEASE_TYPE="alpha"
+          echo "🔬 Detected ALPHA release (experimental)"
+        elif echo "$COMMIT_MSG" | grep -qE "^beta:|beta"; then
+          RELEASE_TYPE="beta"
+          echo "🧪 Detected BETA release (testing)"
+        elif echo "$COMMIT_MSG" | grep -qE "^release:|^stable:"; then
+          RELEASE_TYPE="minor"
+          echo "📦 Detected stable release (minor)"
+        elif echo "$COMMIT_MSG" | grep -qE "^docs:|^style:|^refactor:|^test:|^chore:"; then
+          RELEASE_TYPE="beta"
+          echo "📝 Detected documentation/maintenance change (beta pre-release)"
+        elif echo "$COMMIT_MSG" | grep -qE "^wip:|^draft:|^temp:"; then
+          SHOULD_RELEASE="false"
+          echo "🚧 Detected WIP commit - skipping release"
+        else
+          RELEASE_TYPE="beta"
+          echo "🤖 Default: BETA pre-release"
+        fi
+        
+        # 特殊关键词检测
+        if echo "$COMMIT_MSG" | grep -qE "no-release|skip-release|\[skip release\]|\[no release\]"; then
+          SHOULD_RELEASE="false"
+          echo "⏭️ Found skip-release keyword - skipping release"
+        fi
+        
+        echo "release-type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
+        echo "should-release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
+        echo "Final decision: Type=$RELEASE_TYPE, Should Release=$SHOULD_RELEASE"
+    
+    - name: Create smart release
+      id: release
+      if: steps.detect.outputs.should-release == 'true'
+      run: |
+        RELEASE_TYPE="${{ steps.detect.outputs.release-type }}"
+        
+        case "$RELEASE_TYPE" in
+          "alpha")
+            standard-version --prerelease alpha
+            ;;
+          "beta")
+            standard-version --prerelease beta
+            ;;
+          "patch")
+            standard-version --release-as patch
+            ;;
+          "minor")
+            standard-version --release-as minor
+            ;;
+          "major")
+            standard-version --release-as major
+            ;;
+          *)
+            standard-version --prerelease beta
+            ;;
+        esac
+        
+        version=$(git describe --tags --abbrev=0)
+        echo "version=$version" >> $GITHUB_OUTPUT
+        echo "Created $RELEASE_TYPE release: $version"
     
     - name: Download all artifacts
+      if: steps.detect.outputs.should-release == 'true'
       uses: actions/download-artifact@v3
       with:
         path: dist/
     
     - name: Prepare release assets
+      if: steps.detect.outputs.should-release == 'true'
       run: |
         mkdir -p release-assets
         for dir in dist/binaries-*/; do
@@ -369,31 +449,42 @@ jobs:
           fi
         done
     
-    - name: Create GitHub Pre-release
+    - name: Push changes and tags
+      if: steps.detect.outputs.should-release == 'true'
+      run: |
+        git push --follow-tags origin main
+    
+    - name: Create GitHub Release
+      if: steps.detect.outputs.should-release == 'true'
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ steps.auto_release.outputs.version }}
-        name: Pre-release ${{ steps.auto_release.outputs.version }}
+        tag_name: ${{ steps.release.outputs.version }}
+        name: ${{ steps.detect.outputs.release-type == 'beta' && 'Pre-release' || 'Release' }} ${{ steps.release.outputs.version }}
         body: |
-          🚀 **Automated Pre-release**
+          🚀 **Smart Release - ${{ steps.detect.outputs.release-type | upper }}**
           
-          This is an automated pre-release build from the latest main branch.
+          This release was automatically created based on commit message analysis:
           
-          **Changes in this build:**
+          **Commit**: ${{ github.event.head_commit.message }}
+          **Release Type**: ${{ steps.detect.outputs.release-type }}
+          **Detected From**: Conventional commit pattern
+          
+          **Changes in this release:**
           - Latest commits from main branch
-          - All tests passing ✅
+          - All tests passing ✅ (Coverage: ${{ needs.test.outputs.coverage }}%)
           - Code quality checks passed ✅
           - Security scans completed ✅
           
-          **⚠️ This is a pre-release version**
-          - Use for testing and development only
-          - May contain unstable features
-          - Not recommended for production use
+          ${{ steps.detect.outputs.release-type == 'major' && '🚨 **MAJOR RELEASE** - Contains breaking changes' || '' }}
+          ${{ steps.detect.outputs.release-type == 'minor' && '✨ **MINOR RELEASE** - New features added' || '' }}
+          ${{ steps.detect.outputs.release-type == 'patch' && '🐛 **PATCH RELEASE** - Bug fixes' || '' }}
+          ${{ contains(steps.detect.outputs.release-type, 'alpha') && '⚠️ **ALPHA RELEASE** - Experimental features, use with caution' || '' }}
+          ${{ contains(steps.detect.outputs.release-type, 'beta') && '⚠️ **BETA RELEASE** - Testing version, not for production' || '' }}
           
           For stable releases, see the [releases page](https://github.com/${{ github.repository }}/releases).
         files: release-assets/*
         draft: false
-        prerelease: true
+        prerelease: ${{ contains(steps.detect.outputs.release-type, 'alpha') || contains(steps.detect.outputs.release-type, 'beta') }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -515,7 +606,7 @@ jobs:
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: [test, docker, security-scan]
+    needs: [test, docker, security-scan, smart-release]
     if: |
       (github.ref == 'refs/heads/main' && github.event_name != 'workflow_dispatch') ||
       (github.event_name == 'workflow_dispatch' && inputs.deploy_environment == 'production') ||
@@ -561,7 +652,7 @@ jobs:
   notify:
     name: Notify Results
     runs-on: ubuntu-latest
-    needs: [test, build, docker, auto-prerelease, manual-release, deploy-staging, deploy-production]
+    needs: [test, build, docker, smart-release, manual-release, deploy-staging, deploy-production]
     if: always() && github.ref == 'refs/heads/main'
     
     steps:
@@ -570,11 +661,14 @@ jobs:
         echo "## 🎯 CICD Pipeline Summary"
         echo "**Branch**: ${{ github.ref_name }}"
         echo "**Commit**: ${{ github.sha }}"
+        echo "**Commit Message**: ${{ github.event.head_commit.message }}"
         echo "**Coverage**: ${{ needs.test.outputs.coverage }}%"
         echo "**Test Status**: ${{ needs.test.outputs.test-status }}"
         
-        if [ "${{ needs.auto-prerelease.result }}" == "success" ]; then
-          echo "✅ Auto pre-release created"
+        if [ "${{ needs.smart-release.outputs.should-release }}" == "true" ]; then
+          echo "✅ Smart release created: ${{ needs.smart-release.outputs.release-type }} - ${{ needs.smart-release.outputs.version }}"
+        elif [ "${{ needs.smart-release.outputs.should-release }}" == "false" ]; then
+          echo "⏭️ Release skipped based on commit message"
         elif [ "${{ needs.manual-release.result }}" == "success" ]; then
           echo "✅ Manual release created"
         fi

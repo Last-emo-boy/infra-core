@@ -11,7 +11,38 @@
 - ✅ **容器化**: Docker镜像构建和推送
 - ✅ **安全扫描**: 代码和容器安全检查
 
-## 🎛️ 手动触发发布的方法
+## 🤖 智能发布系统 (新增功能)
+
+### 基于Commit消息自动检测发布类型
+现在可以通过commit消息的关键词自动决定发布类型，无需手动选择！
+
+#### 🚀 智能检测规则
+| Commit模式 | 发布类型 | 版本变化 | 示例 |
+|-----------|---------|---------|------|
+| `feat!:`, `BREAKING CHANGE` | **major** | 0.1.0 → 1.0.0 | `feat!: 重构API` |
+| `feat:`, `feature:`, `minor:` | **minor** | 0.1.0 → 0.2.0 | `feat: 新增功能` |
+| `fix:`, `bugfix:`, `patch:` | **patch** | 0.1.0 → 0.1.1 | `fix: 修复bug` |
+| `alpha:`, `experimental:` | **alpha** | 0.1.0 → 0.1.1-alpha.0 | `alpha: 实验功能` |
+| `beta:`, `docs:`, `refactor:` | **beta** | 0.1.0 → 0.1.1-beta.0 | `docs: 更新文档` |
+| `wip:`, `[skip release]` | **跳过** | 无变化 | `wip: 开发中` |
+
+#### ✨ 智能发布使用方法
+```bash
+# 1. 使用智能commit消息
+git commit -m "feat: 添加用户认证功能"    # 自动创建minor版本
+git commit -m "fix: 解决登录bug"        # 自动创建patch版本  
+git commit -m "feat!: 重构API接口"       # 自动创建major版本
+git commit -m "docs: 更新文档 [skip release]"  # 跳过发布
+
+# 2. 推送到main分支
+git push origin main
+
+# 3. 系统自动分析commit并创建对应版本！
+```
+
+详细说明请查看：[docs/SMART_RELEASE.md](docs/SMART_RELEASE.md)
+
+## 🎛️ 手动发布方法 (备用选项)
 
 ### 方法1: GitHub网页界面 (推荐)
 1. 访问: https://github.com/Last-emo-boy/infra-core/actions
@@ -72,12 +103,22 @@ gh workflow run "CICD Pipeline" --ref main --field release_type=none --field dep
 每次推送 → 0.x.y-beta.z (自动递增)
 ```
 
-## 🔄 自动化流程说明
+## 🔄 新的发布流程说明
+
+### 智能发布 (推荐)
+1. **编写有意义的commit消息** → 系统自动检测版本类型
+2. **推送到main分支** → 自动测试、构建、发布、部署
+3. **无需手动操作** → 完全自动化流程
+
+### 手动发布 (备用)
+- **GitHub网页界面**: Actions → CICD Pipeline → Run workflow
+- **PowerShell脚本**: `./scripts/release.ps1 -ReleaseType patch`
+- **GitHub CLI**: `gh workflow run "CICD Pipeline"`
 
 ### 自动触发条件
 | 触发条件 | 执行操作 |
 |---------|---------|
-| 推送到 `main` 分支 | 测试 → 构建 → 自动预发布 → 部署production |
+| 推送到 `main` + 智能commit | 测试 → 构建 → **智能发布** → 部署production |
 | 推送到 `develop` 分支 | 测试 → 构建 → 部署staging |
 | 创建Pull Request | 仅测试和代码质量检查 |
 | 手动触发 | 根据参数执行相应操作 |
