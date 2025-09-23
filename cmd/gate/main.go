@@ -19,7 +19,6 @@ import (
 
 func main() {
 	var (
-		configFile = flag.String("config", "config.yaml", "Configuration file path")
 		version    = flag.Bool("version", false, "Show version information")
 	)
 	flag.Parse()
@@ -31,7 +30,7 @@ func main() {
 	}
 
 	// Load configuration
-	cfg, err := config.Load(*configFile)
+	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}

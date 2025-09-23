@@ -30,6 +30,71 @@ export interface Service {
   updated_at: string;
 }
 
+// SSO and Portal Types
+export interface RegisteredService {
+  id: string;
+  name: string;
+  display_name: string;
+  description?: string;
+  service_url: string;
+  callback_url?: string;
+  icon?: string;
+  category: 'web' | 'api' | 'admin' | 'monitoring' | 'other';
+  is_public: boolean;
+  required_role: 'user' | 'admin';
+  status: 'active' | 'inactive' | 'maintenance';
+  health_url?: string;
+  last_healthy?: string;
+  is_healthy: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceCategory {
+  name: string;
+  display_name: string;
+  icon: string;
+  services: RegisteredService[];
+}
+
+export interface SSOLoginRequest {
+  service_name: string;
+  redirect_url: string;
+}
+
+export interface SSOLoginResponse {
+  sso_token: string;
+  redirect_url: string;
+  expires_at: number;
+}
+
+export interface PortalDashboard {
+  user: User;
+  service_categories: ServiceCategory[];
+  recent_services: RegisteredService[];
+  service_count: number;
+  healthy_services: number;
+}
+
+export interface ServiceHealthCheck {
+  id: number;
+  service_id: string;
+  is_healthy: boolean;
+  response_time: number;
+  error_message?: string;
+  checked_at: string;
+}
+
+export interface UserServicePermission {
+  id: number;
+  user_id: number;
+  service_id: string;
+  can_access: boolean;
+  granted_by: number;
+  granted_at: string;
+  expires_at?: string;
+}
+
 export interface SystemInfo {
   version: string;
   environment: string;

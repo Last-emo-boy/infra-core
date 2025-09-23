@@ -37,3 +37,35 @@ console:
     origins: ["http://localhost:3000", "http://localhost:5173"]
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     headers: ["Content-Type", "Authorization"]
+
+orchestrator:
+  port: 8084
+  node_name: "localhost"
+  cluster_mode: false
+  health_check_interval: "30s"
+  resource_monitoring: true
+  default_replicas: 1
+  max_deployments: 50
+  enable_metrics: true
+
+probe:
+  port: 8085
+  check_interval: "10s"
+  alert_interval: "30s"
+  cleanup_interval: "5m"
+  result_retention: "24h"
+  alert_retention: "7d"
+  enable_notifications: true
+  max_concurrent_probes: 10
+
+snap:
+  port: 8086
+  repo_dir: "./data/snapshots"
+  temp_dir: "./tmp/snap"
+  max_parallel: 4
+  rate_limit: "10MB/s"
+  scrub_interval: "24h"
+  default_retention:
+    daily: 7
+    weekly: 4
+    monthly: 12

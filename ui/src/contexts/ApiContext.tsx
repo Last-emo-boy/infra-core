@@ -8,7 +8,13 @@ import type {
   LoginResponse, 
   Service, 
   SystemInfo, 
-  DashboardData
+  DashboardData,
+  RegisteredService,
+  ServiceCategory,
+  SSOLoginRequest,
+  SSOLoginResponse,
+  PortalDashboard,
+  ServiceHealthCheck
 } from '../types';
 
 export interface ApiContextType {
@@ -32,6 +38,23 @@ export interface ApiContextType {
     start: (id: number) => Promise<void>;
     stop: (id: number) => Promise<void>;
     getLogs: (id: number) => Promise<string>;
+  };
+  sso: {
+    listServices: () => Promise<RegisteredService[]>;
+    getUserServices: () => Promise<RegisteredService[]>;
+    registerService: (serviceData: Partial<RegisteredService>) => Promise<RegisteredService>;
+    updateService: (id: string, serviceData: Partial<RegisteredService>) => Promise<RegisteredService>;
+    deleteService: (id: string) => Promise<void>;
+    initiateSSO: (request: SSOLoginRequest) => Promise<SSOLoginResponse>;
+    validateSSO: (token: string) => Promise<any>;
+    getServiceHealth: (id: string) => Promise<ServiceHealthCheck>;
+    getServiceHealthHistory: (id: string, limit?: number) => Promise<ServiceHealthCheck[]>;
+    grantServiceAccess: (userId: number, serviceId: string) => Promise<void>;
+    revokeServiceAccess: (userId: number, serviceId: string) => Promise<void>;
+  };
+  portal: {
+    getDashboard: () => Promise<PortalDashboard>;
+    getServicesByCategory: (category?: string) => Promise<ServiceCategory[]>;
   };
   system: {
     getInfo: () => Promise<SystemInfo>;
@@ -137,6 +160,60 @@ export const ApiProvider: React.FC<ApiProviderProps> = ({ children }) => {
       },
       getLogs: async (id: number): Promise<string> => {
         const response = await api.get<string>(`/api/v1/services/${id}/logs`);
+        return response.data;
+      },
+    },
+    sso: {
+      listServices: async (): Promise<RegisteredService[]> => {
+        const response = await api.get<{ services: RegisteredService[] }>('/api/v1/sso/services');
+        return response.data.services;
+      },
+      getUserServices: async (): Promise<RegisteredService[]> => {
+        const response = await api.get<{ services: RegisteredService[] }>('/api/v1/sso/user/services');
+        return response.data.services;
+      },
+      registerService: async (serviceData: Partial<RegisteredService>): Promise<RegisteredService> => {
+        const response = await api.post<RegisteredService>('/api/v1/sso/services', serviceData);
+        return response.data;
+      },
+      updateService: async (id: string, serviceData: Partial<RegisteredService>): Promise<RegisteredService> => {
+        const response = await api.put<RegisteredService>(`/api/v1/sso/services/${id}`, serviceData);
+        return response.data;
+      },
+      deleteService: async (id: string): Promise<void> => {
+        await api.delete(`/api/v1/sso/services/${id}`);
+      },
+      initiateSSO: async (request: SSOLoginRequest): Promise<SSOLoginResponse> => {
+        const response = await api.post<SSOLoginResponse>('/api/v1/sso/login', request);
+        return response.data;
+      },
+      validateSSO: async (token: string): Promise<any> => {
+        const response = await api.get(`/api/v1/sso/validate?token=${token}`);
+        return response.data;
+      },
+      getServiceHealth: async (id: string): Promise<ServiceHealthCheck> => {
+        const response = await api.get<ServiceHealthCheck>(`/api/v1/sso/services/${id}/health`);
+        return response.data;
+      },
+      getServiceHealthHistory: async (id: string, limit = 50): Promise<ServiceHealthCheck[]> => {
+        const response = await api.get<{ checks: ServiceHealthCheck[] }>(`/api/v1/sso/services/${id}/health/history?limit=${limit}`);
+        return response.data.checks;
+      },
+      grantServiceAccess: async (userId: number, serviceId: string): Promise<void> => {
+        await api.post(`/api/v1/sso/permissions/${userId}/${serviceId}/grant`);
+      },
+      revokeServiceAccess: async (userId: number, serviceId: string): Promise<void> => {
+        await api.post(`/api/v1/sso/permissions/${userId}/${serviceId}/revoke`);
+      },
+    },
+    portal: {
+      getDashboard: async (): Promise<PortalDashboard> => {
+        const response = await api.get<PortalDashboard>('/api/v1/portal/dashboard');
+        return response.data;
+      },
+      getServicesByCategory: async (category?: string): Promise<ServiceCategory[]> => {
+        const url = category ? `/api/v1/portal/services?category=${category}` : '/api/v1/portal/services';
+        const response = await api.get<ServiceCategory[]>(url);
         return response.data;
       },
     },

@@ -14,6 +14,7 @@ import (
 	"github.com/last-emo-boy/infra-core/pkg/auth"
 	"github.com/last-emo-boy/infra-core/pkg/config"
 	"github.com/last-emo-boy/infra-core/pkg/database"
+	"github.com/last-emo-boy/infra-core/pkg/services"
 )
 
 func main() {
@@ -25,7 +26,7 @@ func main() {
 		environment = "development"
 	}
 
-	cfg, err := config.Load(environment)
+	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("❌ Failed to load configuration: %v", err)
 	}
@@ -50,6 +51,7 @@ func main() {
 	userHandler := handlers.NewUserHandler(authService, db)
 	serviceHandler := handlers.NewServiceHandler(db)
 	systemHandler := handlers.NewSystemHandler(db)
+	ssoHandler := handlers.NewSSOHandler(authService, db)
 
 	// Setup Gin router
 	if environment == "production" {
@@ -90,7 +92,7 @@ func main() {
 
 	// Protected routes
 	protected := api.Group("/")
-	protected.Use(middleware.AuthMiddleware(authService))
+	protected.Use(middleware.AuthMiddleware(authService, db))
 	{
 		// User management
 		users := protected.Group("/users")
@@ -120,6 +122,32 @@ func main() {
 			services.GET("/:id/logs", serviceHandler.GetServiceLogs)
 		}
 
+		// SSO management
+		sso := protected.Group("/sso")
+		{
+			// Service registration and management
+			sso.GET("/services", ssoHandler.ListServices)
+			sso.GET("/user/services", ssoHandler.ListUserServices)
+			sso.GET("/services/:id", ssoHandler.GetService)
+			sso.GET("/services/:id/health", ssoHandler.GetServiceHealth)
+			sso.GET("/services/:id/health/history", ssoHandler.GetServiceHealthHistory)
+			
+			// SSO authentication
+			sso.POST("/login", ssoHandler.InitiateSSO)
+			sso.GET("/validate", ssoHandler.ValidateSSO)
+
+			// Admin-only SSO management
+			adminSSO := sso.Group("/")
+			adminSSO.Use(middleware.RequireRole(authService, "admin"))
+			{
+				adminSSO.POST("/services", ssoHandler.RegisterService)
+				adminSSO.PUT("/services/:id", ssoHandler.UpdateService)
+				adminSSO.DELETE("/services/:id", ssoHandler.DeleteService)
+				adminSSO.POST("/permissions/:user_id/:service_id/grant", ssoHandler.GrantServiceAccess)
+				adminSSO.POST("/permissions/:user_id/:service_id/revoke", ssoHandler.RevokeServiceAccess)
+			}
+		}
+
 		// System information
 		system := protected.Group("/system")
 		{
@@ -135,6 +163,11 @@ func main() {
 			adminSystem.GET("/audit", systemHandler.GetAuditLogs)
 		}
 	}
+
+	// Start health checker service
+	healthChecker := services.NewHealthChecker(db)
+	healthChecker.Start()
+	log.Printf("🏥 Health checker service started")
 
 	// Create HTTP server
 	addr := fmt.Sprintf("%s:%d", cfg.Console.Host, cfg.Console.Port)

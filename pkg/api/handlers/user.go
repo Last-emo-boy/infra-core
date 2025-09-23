@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -97,8 +98,51 @@ func (h *UserHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Generate token
-	token, expiresAt, err := h.auth.GenerateToken(user.ID, user.Username, user.Role)
+	// Create SSO session
+	_, sessionHash, err := h.auth.GenerateSessionToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session"})
+		return
+	}
+
+	// Store session in database
+	ssoSession := &database.SSOSession{
+		UserID:    user.ID,
+		TokenHash: sessionHash,
+		ExpiresAt: time.Now().Add(24 * time.Hour), // 24 hour session
+		IPAddress: c.ClientIP(),
+		UserAgent: c.GetHeader("User-Agent"),
+		IsActive:  true,
+		LastUsed:  time.Now(),
+	}
+
+	sessionRepo := h.db.SSOSessionRepository()
+	if err := sessionRepo.Create(ssoSession); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session"})
+		return
+	}
+
+	// Get user services for token
+	permRepo := h.db.UserServicePermissionRepository()
+	userServices, err := permRepo.ListUserServices(user.ID)
+	if err != nil {
+		userServices = []*database.RegisteredService{} // Empty on error
+	}
+
+	services := make([]string, len(userServices))
+	for i, service := range userServices {
+		services[i] = service.Name
+	}
+
+	// Generate JWT token with session and services
+	token, expiresAt, err := h.auth.GenerateTokenWithSession(
+		user.ID, 
+		user.Username, 
+		user.Role, 
+		ssoSession.ID,
+		[]string{}, // permissions - could be enhanced later
+		services,
+	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return

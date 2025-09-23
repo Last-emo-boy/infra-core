@@ -190,3 +190,56 @@ type AuditLog struct {
 	UserAgent    *string   `db:"user_agent" json:"user_agent"`
 	CreatedAt    time.Time `db:"created_at" json:"created_at"`
 }
+
+// RegisteredService represents a service registered with the SSO gateway
+type RegisteredService struct {
+	ID           string    `db:"id" json:"id"`
+	Name         string    `db:"name" json:"name"`
+	DisplayName  string    `db:"display_name" json:"display_name"`
+	Description  *string   `db:"description" json:"description"`
+	ServiceURL   string    `db:"service_url" json:"service_url"`
+	CallbackURL  *string   `db:"callback_url" json:"callback_url"`
+	Icon         *string   `db:"icon" json:"icon"`
+	Category     string    `db:"category" json:"category"`
+	IsPublic     bool      `db:"is_public" json:"is_public"`
+	RequiredRole string    `db:"required_role" json:"required_role"`
+	Status       string    `db:"status" json:"status"` // active, inactive, maintenance
+	HealthURL    *string   `db:"health_url" json:"health_url"`
+	LastHealthy  *time.Time `db:"last_healthy" json:"last_healthy"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
+}
+
+// SSOSession represents an SSO session
+type SSOSession struct {
+	ID           string    `db:"id" json:"id"`
+	UserID       int       `db:"user_id" json:"user_id"`
+	TokenHash    string    `db:"token_hash" json:"-"`
+	ExpiresAt    time.Time `db:"expires_at" json:"expires_at"`
+	IPAddress    string    `db:"ip_address" json:"ip_address"`
+	UserAgent    string    `db:"user_agent" json:"user_agent"`
+	IsActive     bool      `db:"is_active" json:"is_active"`
+	LastUsed     time.Time `db:"last_used" json:"last_used"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+}
+
+// UserServicePermission represents user permissions for specific services
+type UserServicePermission struct {
+	ID        int       `db:"id" json:"id"`
+	UserID    int       `db:"user_id" json:"user_id"`
+	ServiceID string    `db:"service_id" json:"service_id"`
+	CanAccess bool      `db:"can_access" json:"can_access"`
+	GrantedBy int       `db:"granted_by" json:"granted_by"`
+	GrantedAt time.Time `db:"granted_at" json:"granted_at"`
+	ExpiresAt *time.Time `db:"expires_at" json:"expires_at"`
+}
+
+// ServiceHealthCheck represents health check results for registered services
+type ServiceHealthCheck struct {
+	ID          int       `db:"id" json:"id"`
+	ServiceID   string    `db:"service_id" json:"service_id"`
+	IsHealthy   bool      `db:"is_healthy" json:"is_healthy"`
+	ResponseTime int       `db:"response_time" json:"response_time"` // in milliseconds
+	ErrorMessage *string   `db:"error_message" json:"error_message"`
+	CheckedAt   time.Time `db:"checked_at" json:"checked_at"`
+}

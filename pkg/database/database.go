@@ -226,6 +226,65 @@ func (db *DB) InitSchema() error {
 		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 	);
 
+	-- Registered services table (for SSO gateway)
+	CREATE TABLE IF NOT EXISTS registered_services (
+		id TEXT PRIMARY KEY, -- UUID
+		name TEXT UNIQUE NOT NULL,
+		display_name TEXT NOT NULL,
+		description TEXT,
+		service_url TEXT NOT NULL,
+		callback_url TEXT,
+		icon TEXT,
+		category TEXT NOT NULL DEFAULT 'other', -- web, api, admin, monitoring, other
+		is_public BOOLEAN DEFAULT FALSE,
+		required_role TEXT NOT NULL DEFAULT 'user', -- user, admin
+		status TEXT NOT NULL DEFAULT 'active', -- active, inactive, maintenance
+		health_url TEXT,
+		last_healthy DATETIME,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	-- SSO sessions table
+	CREATE TABLE IF NOT EXISTS sso_sessions (
+		id TEXT PRIMARY KEY, -- UUID
+		user_id INTEGER NOT NULL,
+		token_hash TEXT NOT NULL,
+		expires_at DATETIME NOT NULL,
+		ip_address TEXT NOT NULL,
+		user_agent TEXT NOT NULL,
+		is_active BOOLEAN DEFAULT TRUE,
+		last_used DATETIME DEFAULT CURRENT_TIMESTAMP,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	);
+
+	-- User service permissions table
+	CREATE TABLE IF NOT EXISTS user_service_permissions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		service_id TEXT NOT NULL,
+		can_access BOOLEAN DEFAULT TRUE,
+		granted_by INTEGER NOT NULL,
+		granted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		expires_at DATETIME,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (service_id) REFERENCES registered_services(id) ON DELETE CASCADE,
+		FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE CASCADE,
+		UNIQUE(user_id, service_id)
+	);
+
+	-- Service health checks table
+	CREATE TABLE IF NOT EXISTS service_health_checks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		service_id TEXT NOT NULL,
+		is_healthy BOOLEAN NOT NULL,
+		response_time INTEGER, -- milliseconds
+		error_message TEXT,
+		checked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (service_id) REFERENCES registered_services(id) ON DELETE CASCADE
+	);
+
 	-- Create indexes for better performance
 	CREATE INDEX IF NOT EXISTS idx_services_status ON services(status);
 	CREATE INDEX IF NOT EXISTS idx_deployments_service_id ON deployments(service_id);
@@ -240,6 +299,16 @@ func (db *DB) InitSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_logs_service_timestamp ON logs_index(service_id, start_timestamp);
 	CREATE INDEX IF NOT EXISTS idx_snapshots_plan_timestamp ON snapshots(plan_id, timestamp);
 	CREATE INDEX IF NOT EXISTS idx_audit_logs_user_timestamp ON audit_logs(user_id, created_at);
+	CREATE INDEX IF NOT EXISTS idx_registered_services_status ON registered_services(status);
+	CREATE INDEX IF NOT EXISTS idx_registered_services_category ON registered_services(category);
+	CREATE INDEX IF NOT EXISTS idx_registered_services_role ON registered_services(required_role);
+	CREATE INDEX IF NOT EXISTS idx_sso_sessions_user_id ON sso_sessions(user_id);
+	CREATE INDEX IF NOT EXISTS idx_sso_sessions_token_hash ON sso_sessions(token_hash);
+	CREATE INDEX IF NOT EXISTS idx_sso_sessions_expires_at ON sso_sessions(expires_at);
+	CREATE INDEX IF NOT EXISTS idx_user_service_permissions_user_id ON user_service_permissions(user_id);
+	CREATE INDEX IF NOT EXISTS idx_user_service_permissions_service_id ON user_service_permissions(service_id);
+	CREATE INDEX IF NOT EXISTS idx_service_health_checks_service_id ON service_health_checks(service_id);
+	CREATE INDEX IF NOT EXISTS idx_service_health_checks_checked_at ON service_health_checks(checked_at);
 
 	-- Create triggers for updated_at timestamps
 	CREATE TRIGGER IF NOT EXISTS update_users_timestamp 
@@ -271,6 +340,12 @@ func (db *DB) InitSchema() error {
 		BEGIN
 			UPDATE snap_plans SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 		END;
+
+	CREATE TRIGGER IF NOT EXISTS update_registered_services_timestamp 
+		AFTER UPDATE ON registered_services
+		BEGIN
+			UPDATE registered_services SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+		END;
 	`
 
 	_, err := db.Exec(schema)
@@ -301,7 +376,7 @@ func (db *DB) GetStats() (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
 
 	// Get table counts
-	tables := []string{"users", "services", "deployments", "routes", "certificates", "metrics", "logs_index", "snapshots", "snap_plans", "audit_logs"}
+	tables := []string{"users", "services", "deployments", "routes", "certificates", "metrics", "logs_index", "snapshots", "snap_plans", "audit_logs", "registered_services", "sso_sessions", "user_service_permissions", "service_health_checks"}
 
 	for _, table := range tables {
 		var count int
@@ -347,4 +422,24 @@ func (db *DB) RouteRepository() *RouteRepository {
 // MetricRepository returns a new metric repository
 func (db *DB) MetricRepository() *MetricRepository {
 	return NewMetricRepository(db)
+}
+
+// RegisteredServiceRepository returns a new registered service repository
+func (db *DB) RegisteredServiceRepository() *RegisteredServiceRepository {
+	return NewRegisteredServiceRepository(db)
+}
+
+// SSOSessionRepository returns a new SSO session repository
+func (db *DB) SSOSessionRepository() *SSOSessionRepository {
+	return NewSSOSessionRepository(db)
+}
+
+// UserServicePermissionRepository returns a new user service permission repository
+func (db *DB) UserServicePermissionRepository() *UserServicePermissionRepository {
+	return NewUserServicePermissionRepository(db)
+}
+
+// ServiceHealthCheckRepository returns a new service health check repository
+func (db *DB) ServiceHealthCheckRepository() *ServiceHealthCheckRepository {
+	return NewServiceHealthCheckRepository(db)
 }

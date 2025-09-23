@@ -11,8 +11,11 @@ import (
 
 // Config represents the global configuration for infra-core
 type Config struct {
-	Gate    GateConfig    `yaml:"gate" json:"gate"`
-	Console ConsoleConfig `yaml:"console" json:"console"`
+	Gate         GateConfig         `yaml:"gate" json:"gate"`
+	Console      ConsoleConfig      `yaml:"console" json:"console"`
+	Orchestrator OrchestratorConfig `yaml:"orchestrator" json:"orchestrator"`
+	Probe        ProbeMonitorConfig `yaml:"probe" json:"probe"`
+	Snap         SnapConfig         `yaml:"snap" json:"snap"`
 }
 
 type LogConfig struct {
@@ -77,20 +80,54 @@ type ConsoleConfig struct {
 	CORS     CORSConfig     `yaml:"cors" json:"cors"`
 }
 
+type OrchestratorConfig struct {
+	Port                int    `yaml:"port" json:"port"`
+	NodeName            string `yaml:"node_name" json:"node_name"`
+	ClusterMode         bool   `yaml:"cluster_mode" json:"cluster_mode"`
+	HealthCheckInterval string `yaml:"health_check_interval" json:"health_check_interval"`
+	ResourceMonitoring  bool   `yaml:"resource_monitoring" json:"resource_monitoring"`
+	DefaultReplicas     int    `yaml:"default_replicas" json:"default_replicas"`
+	MaxDeployments      int    `yaml:"max_deployments" json:"max_deployments"`
+	EnableMetrics       bool   `yaml:"enable_metrics" json:"enable_metrics"`
+}
+
+type ProbeMonitorConfig struct {
+	Port              int    `yaml:"port" json:"port"`
+	CheckInterval     string `yaml:"check_interval" json:"check_interval"`
+	AlertInterval     string `yaml:"alert_interval" json:"alert_interval"`
+	CleanupInterval   string `yaml:"cleanup_interval" json:"cleanup_interval"`
+	ResultRetention   string `yaml:"result_retention" json:"result_retention"`
+	AlertRetention    string `yaml:"alert_retention" json:"alert_retention"`
+	EnableNotifications bool `yaml:"enable_notifications" json:"enable_notifications"`
+	MaxConcurrentProbes int  `yaml:"max_concurrent_probes" json:"max_concurrent_probes"`
+}
+
+type SnapConfig struct {
+	Port        int    `yaml:"port" json:"port"`
+	RepoDir     string `yaml:"repo_dir" json:"repo_dir"`
+	TempDir     string `yaml:"temp_dir" json:"temp_dir"`
+	MaxParallel int    `yaml:"max_parallel" json:"max_parallel"`
+	RateLimit   string `yaml:"rate_limit" json:"rate_limit"`
+	ScrubInterval string `yaml:"scrub_interval" json:"scrub_interval"`
+	DefaultRetention struct {
+		Daily   int `yaml:"daily" json:"daily"`
+		Weekly  int `yaml:"weekly" json:"weekly"`
+		Monthly int `yaml:"monthly" json:"monthly"`
+	} `yaml:"default_retention" json:"default_retention"`
+}
+
 // Global configuration instance
 var globalConfig *Config
 
 // Load loads configuration from file and environment variables
-func Load(environment string) (*Config, error) {
+func Load() (*Config, error) {
+	environment := os.Getenv("INFRA_CORE_ENV")
+	if environment == "" {
+		environment = "development"
+	}
+	
 	// Determine config file path
 	configPath := fmt.Sprintf("./configs/%s.yaml", environment)
-	if environment == "" {
-		environment = os.Getenv("INFRA_CORE_ENV")
-		if environment == "" {
-			environment = "development"
-		}
-		configPath = fmt.Sprintf("./configs/%s.yaml", environment)
-	}
 
 	config := &Config{}
 
@@ -171,6 +208,45 @@ func overrideWithEnv(config *Config) {
 	if val := os.Getenv("INFRA_CORE_DB_PATH"); val != "" {
 		config.Console.Database.Path = val
 	}
+
+	// Orchestrator configuration
+	if val := os.Getenv("INFRA_CORE_ORCH_PORT"); val != "" {
+		if port, err := strconv.Atoi(val); err == nil {
+			config.Orchestrator.Port = port
+		}
+	}
+	if val := os.Getenv("INFRA_CORE_ORCH_NODE_NAME"); val != "" {
+		config.Orchestrator.NodeName = val
+	}
+	if val := os.Getenv("INFRA_CORE_ORCH_CLUSTER_MODE"); val != "" {
+		config.Orchestrator.ClusterMode = strings.ToLower(val) == "true"
+	}
+
+	// Probe configuration
+	if val := os.Getenv("INFRA_CORE_PROBE_PORT"); val != "" {
+		if port, err := strconv.Atoi(val); err == nil {
+			config.Probe.Port = port
+		}
+	}
+	if val := os.Getenv("INFRA_CORE_PROBE_CHECK_INTERVAL"); val != "" {
+		config.Probe.CheckInterval = val
+	}
+	if val := os.Getenv("INFRA_CORE_PROBE_ENABLE_NOTIFICATIONS"); val != "" {
+		config.Probe.EnableNotifications = strings.ToLower(val) == "true"
+	}
+
+	// Snap configuration
+	if val := os.Getenv("INFRA_CORE_SNAP_PORT"); val != "" {
+		if port, err := strconv.Atoi(val); err == nil {
+			config.Snap.Port = port
+		}
+	}
+	if val := os.Getenv("INFRA_CORE_SNAP_REPO_DIR"); val != "" {
+		config.Snap.RepoDir = val
+	}
+	if val := os.Getenv("INFRA_CORE_SNAP_TEMP_DIR"); val != "" {
+		config.Snap.TempDir = val
+	}
 }
 
 // validate validates the configuration
@@ -195,6 +271,27 @@ func validate(config *Config, environment string) error {
 	}
 	if config.Console.Database.Path == "" {
 		return fmt.Errorf("console.database.path cannot be empty")
+	}
+
+	// Validate Orchestrator config
+	if config.Orchestrator.Port <= 0 || config.Orchestrator.Port > 65535 {
+		return fmt.Errorf("invalid orchestrator.port: %d", config.Orchestrator.Port)
+	}
+
+	// Validate Probe config
+	if config.Probe.Port <= 0 || config.Probe.Port > 65535 {
+		return fmt.Errorf("invalid probe.port: %d", config.Probe.Port)
+	}
+
+	// Validate Snap config
+	if config.Snap.Port <= 0 || config.Snap.Port > 65535 {
+		return fmt.Errorf("invalid snap.port: %d", config.Snap.Port)
+	}
+	if config.Snap.RepoDir == "" {
+		return fmt.Errorf("snap.repo_dir cannot be empty")
+	}
+	if config.Snap.TempDir == "" {
+		return fmt.Errorf("snap.temp_dir cannot be empty")
 	}
 
 	// JWT secret is required in production
