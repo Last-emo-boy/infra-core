@@ -24,6 +24,11 @@ IMAGE_NAME="last-emo-boy/infra-core"
 BACKUP_DIR="/opt/infra-core/backups"
 LOG_FILE="/var/log/infra-core/deploy.log"
 
+# GitHub Container Registry variables (optional)
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+GITHUB_ACTOR="${GITHUB_ACTOR:-}"
+BACKUP_RETENTION="${BACKUP_RETENTION:-10}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -1275,13 +1280,13 @@ deploy_docker() {
     cd "$DEPLOY_DIR/current"
     
     # Login to GitHub Container Registry if credentials available
-    if [[ -n "$GITHUB_TOKEN" ]]; then
+    if [[ -n "${GITHUB_TOKEN:-}" ]] && [[ -n "${GITHUB_ACTOR:-}" ]]; then
         log_info "Logging into GitHub Container Registry..."
         echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
     fi
     
     # Use latest image or build locally
-    if [[ -n "$GITHUB_TOKEN" ]]; then
+    if [[ -n "${GITHUB_TOKEN:-}" ]];
         log_info "Pulling latest image from registry..."
         docker pull "$REGISTRY/$IMAGE_NAME:latest" || {
             log_warning "Failed to pull image, building locally with mirror optimization..."
