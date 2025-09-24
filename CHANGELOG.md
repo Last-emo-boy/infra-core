@@ -2,31 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+### [0.1.1-beta.0](https://github.com/Last-emo-boy/infra-core/compare/v0.1.0...v0.1.1-beta.0) (2025-09-24)
 
-### Added
-- Comprehensive test infrastructure across all core packages
-- Automated release management with GitHub Actions
-- Version control strategy with 0.x.x pre-release format
-- Multi-platform build support (Linux, Windows, macOS, ARM64)
-- Security scanning with gosec integration
-- Code coverage tracking with Codecov
-- Docker multi-arch image builds
-- Auto pre-release system for continuous integration
 
-### Changed
-- **BREAKING**: Migrated from ad-hoc versioning (v1-v6) to semantic versioning
-- Updated version control strategy to use 0.x.x format for pre-release development
-- Improved CI/CD pipeline with comprehensive quality gates
-- Enhanced test coverage across authentication, routing, and service modules
+### Features
 
-### Fixed
-- Resolved compilation errors in cmd modules with proper config.Load() calls
-- Fixed test infrastructure setup and configuration
-- Corrected version control configuration for proper pre-release management
+* 添加智能发布功能 ([e8f4756](https://github.com/Last-emo-boy/infra-core/commit/e8f4756bd843214097e39826df26b8baf7f88cec))
+
+
+### Bug Fixes
+
+* resolve lint issues and SARIF format errors in CI/CD ([ae56fcf](https://github.com/Last-emo-boy/infra-core/commit/ae56fcf392315492fc1a0200eda956ce4f42c555))
+* update deprecated actions and ensure SARIF files exist ([79efc84](https://github.com/Last-emo-boy/infra-core/commit/79efc84c8ef42102be7c717257e5fd467e3519af))
 
 ## [0.1.0] - 2024-01-XX
 
