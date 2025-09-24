@@ -3,7 +3,15 @@
 # Author: last-emo-boy
 # Usage: ./server-deploy.sh [options]
 
-set -e
+# Enhanced error handling
+set -euo pipefail
+IFS=$'\n\t'
+
+# Global retry configuration
+readonly MAX_RETRIES=3
+readonly RETRY_DELAY=5
+readonly NETWORK_TIMEOUT=30
+readonly DOCKER_TIMEOUT=600
 
 # Default configuration
 REPO_URL="https://github.com/last-emo-boy/infra-core.git"
@@ -45,6 +53,236 @@ log_success() {
 log_warning() {
     ensure_log_dir
     echo -e "${YELLOW}[WARNING]${NC} $1" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+# Universal retry function with exponential backoff
+retry_with_backoff() {
+    local max_attempts=${1:-$MAX_RETRIES}
+    local delay=${2:-$RETRY_DELAY}
+    local description="${3:-command}"
+    shift 3
+    
+    local attempt=1
+    while [[ $attempt -le $max_attempts ]]; do
+        if "$@"; then
+            return 0
+        else
+            local exit_code=$?
+            if [[ $attempt -eq $max_attempts ]]; then
+                log_error "$description failed after $max_attempts attempts"
+                return $exit_code
+            fi
+            
+            log_warning "$description failed (attempt $attempt/$max_attempts), retrying in ${delay}s..."
+            sleep "$delay"
+            delay=$((delay * 2))  # Exponential backoff
+            attempt=$((attempt + 1))
+        fi
+    done
+}
+
+# Enhanced network connectivity test
+test_network_connectivity() {
+    local test_sites=("8.8.8.8" "114.114.114.114" "1.1.1.1" "baidu.com" "qq.com")
+    local timeout=${1:-$NETWORK_TIMEOUT}
+    
+    for site in "${test_sites[@]}"; do
+        if timeout "$timeout" ping -c 1 -W 5 "$site" &>/dev/null; then
+            log_success "Network connectivity verified via $site"
+            return 0
+        fi
+    done
+    
+    log_error "No network connectivity detected"
+    return 1
+}
+
+# Safe command execution with timeout
+safe_execute() {
+    local timeout_duration=${1:-300}
+    local description="${2:-command}"
+    shift 2
+    
+    if timeout "$timeout_duration" "$@"; then
+        return 0
+    else
+        local exit_code=$?
+        log_error "$description timed out after ${timeout_duration}s"
+        return $exit_code
+    fi
+}
+
+# Enhanced error handler
+error_handler() {
+    local line_number=$1
+    local exit_code=$2
+    local command="$BASH_COMMAND"
+    
+    log_error "Error on line $line_number: Command '$command' exited with code $exit_code"
+    
+    # Collect system information for debugging
+    {
+        echo "=== System Information ==="
+        uname -a
+        echo "=== Memory Usage ==="
+        free -h
+        echo "=== Disk Usage ==="
+        df -h
+        echo "=== Recent Logs ==="
+        tail -20 "$LOG_FILE" 2>/dev/null || echo "No log file available"
+    } | tee -a "$LOG_FILE" 2>/dev/null || true
+    
+    exit $exit_code
+}
+
+# Set up error trap
+trap 'error_handler ${LINENO} $?' ERR
+
+# Comprehensive system validation
+validate_system_requirements() {
+    log_step "Validating system requirements..."
+    
+    # Check minimum disk space (5GB)
+    local available_space_kb
+    available_space_kb=$(df "$DEPLOY_DIR" 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
+    local available_space_gb=$((available_space_kb / 1024 / 1024))
+    
+    if [[ $available_space_gb -lt 5 ]]; then
+        log_error "Insufficient disk space: ${available_space_gb}GB available, 5GB required"
+        return 1
+    fi
+    log_success "Disk space check passed: ${available_space_gb}GB available"
+    
+    # Check minimum memory (1GB)
+    local total_memory_kb
+    total_memory_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}' || echo "0")
+    local total_memory_gb=$((total_memory_kb / 1024 / 1024))
+    
+    if [[ $total_memory_gb -lt 1 ]]; then
+        log_error "Insufficient memory: ${total_memory_gb}GB available, 1GB required"
+        return 1
+    fi
+    log_success "Memory check passed: ${total_memory_gb}GB available"
+    
+    # Check system architecture
+    local arch
+    arch=$(uname -m)
+    if [[ ! "$arch" =~ ^(x86_64|amd64)$ ]]; then
+        log_warning "Unsupported architecture: $arch (x86_64 recommended)"
+    else
+        log_success "Architecture check passed: $arch"
+    fi
+    
+    # Check OS compatibility
+    local os_info=""
+    if [[ -f /etc/os-release ]]; then
+        os_info=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
+        log_success "OS detected: $os_info"
+        
+        # Check for supported distributions
+        if grep -qi "ubuntu\|debian\|centos\|rhel\|fedora\|rocky\|alma" /etc/os-release; then
+            log_success "OS compatibility verified"
+        else
+            log_warning "Unsupported OS detected, proceeding with caution"
+        fi
+    else
+        log_warning "Could not detect OS information"
+    fi
+    
+    # Check required ports availability
+    local required_ports=(80 443 8080 3000)
+    for port in "${required_ports[@]}"; do
+        if command -v ss &>/dev/null; then
+            if ss -tuln | grep -q ":$port "; then
+                log_warning "Port $port is already in use"
+            else
+                log_success "Port $port is available"
+            fi
+        elif command -v netstat &>/dev/null; then
+            if netstat -tuln | grep -q ":$port "; then
+                log_warning "Port $port is already in use"  
+            else
+                log_success "Port $port is available"
+            fi
+        fi
+    done
+    
+    # Check kernel version for Docker compatibility
+    local kernel_version
+    kernel_version=$(uname -r | cut -d. -f1-2)
+    local kernel_major
+    kernel_major=$(echo "$kernel_version" | cut -d. -f1)
+    local kernel_minor
+    kernel_minor=$(echo "$kernel_version" | cut -d. -f2)
+    
+    if [[ $kernel_major -gt 3 ]] || [[ $kernel_major -eq 3 && $kernel_minor -ge 10 ]]; then
+        log_success "Kernel version compatible: $kernel_version"
+    else
+        log_warning "Kernel version may not be fully compatible: $kernel_version"
+    fi
+    
+    # Test network connectivity
+    retry_with_backoff 2 5 "network connectivity test" test_network_connectivity
+    
+    log_success "System validation completed"
+}
+
+# Enhanced dependency verification
+validate_dependencies() {
+    log_step "Validating dependencies..."
+    
+    local required_commands=()
+    
+    # Always required
+    required_commands+=("curl" "git" "wget" "unzip" "jq")
+    
+    # Docker-specific requirements
+    if [[ "$DEPLOYMENT_TYPE" == "docker" ]]; then
+        required_commands+=("docker" "docker-compose")
+        
+        # Check Docker daemon
+        if command -v docker &>/dev/null; then
+            if ! retry_with_backoff 3 5 "Docker daemon check" docker info; then
+                log_error "Docker daemon is not running or accessible"
+                return 1
+            fi
+            
+            # Check Docker version
+            local docker_version
+            docker_version=$(docker --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
+            log_success "Docker version: $docker_version"
+            
+            # Check Docker Compose version
+            if command -v docker-compose &>/dev/null; then
+                local compose_version
+                compose_version=$(docker-compose --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
+                log_success "Docker Compose version: $compose_version"
+            fi
+        fi
+    else
+        required_commands+=("go" "node" "npm")
+    fi
+    
+    # Validate all required commands
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            log_error "Required command not found: $cmd"
+            log_info "Please install $cmd and try again"
+            return 1
+        else
+            local cmd_version=""
+            case "$cmd" in
+                "go") cmd_version=$(go version | grep -oE 'go[0-9]+\.[0-9]+' | head -1) ;;
+                "node") cmd_version="v$(node --version | tr -d 'v')" ;;
+                "npm") cmd_version="v$(npm --version)" ;;
+                "git") cmd_version="v$(git --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" ;;
+                *) cmd_version="installed" ;;
+            esac
+            log_success "$cmd is available ($cmd_version)"
+        fi
+    done
+    
+    log_success "Dependency validation completed"
 }
 
 log_error() {
@@ -314,27 +552,140 @@ setup_directories() {
     chmod 644 "$LOG_FILE"
 }
 
-# Create backup
+# Enhanced backup with validation and compression
 create_backup() {
     if [[ "$CREATE_BACKUP" == "true" ]]; then
-        log_step "Creating backup..."
+        log_step "Creating comprehensive backup..."
         
         local backup_name="infra-core-backup-$(date +%Y%m%d-%H%M%S)"
         local backup_path="$BACKUP_DIR/$backup_name"
+        local temp_backup_dir="/tmp/infra-backup-$$"
+        
+        # Check available space for backup
+        local source_size=0
+        if [[ -d "$DEPLOY_DIR/current" ]]; then
+            source_size=$(du -sb "$DEPLOY_DIR/current" 2>/dev/null | cut -f1 || echo "0")
+        fi
+        
+        local available_space
+        available_space=$(df "$BACKUP_DIR" | awk 'NR==2{print $4}' | head -1)
+        available_space=$((available_space * 1024))
+        
+        if [[ $source_size -gt $((available_space / 2)) ]]; then
+            log_error "Insufficient space for backup. Need: $((source_size / 1024 / 1024))MB, Available: $((available_space / 1024 / 1024))MB"
+            return 1
+        fi
         
         if [[ -d "$DEPLOY_DIR/current" ]]; then
-            log_info "Backing up current deployment to: $backup_path"
-            mkdir -p "$backup_path"
+            log_info "Creating backup: $backup_name"
+            mkdir -p "$backup_path" "$temp_backup_dir"
             
-            # Backup application files
-            cp -r "$DEPLOY_DIR/current" "$backup_path/"
+            # Create manifest file
+            local manifest_file="$temp_backup_dir/backup-manifest.json"
+            cat > "$manifest_file" << EOF
+{
+    "backup_name": "$backup_name",
+    "timestamp": "$(date -Iseconds)",
+    "hostname": "$(hostname)",
+    "user": "$(whoami)",
+    "source_path": "$DEPLOY_DIR/current",
+    "backup_type": "full",
+    "files": []
+}
+EOF
             
-            # Backup database if exists
-            if [[ -f "/var/lib/infra-core/database.db" ]]; then
-                cp "/var/lib/infra-core/database.db" "$backup_path/"
+            # Backup application files with verification
+            log_info "Backing up application files..."
+            if retry_with_backoff 2 3 "application backup" cp -r "$DEPLOY_DIR/current" "$temp_backup_dir/"; then
+                log_success "Application files backed up successfully"
+                
+                # Generate file checksums
+                log_info "Generating checksums..."
+                find "$temp_backup_dir/current" -type f -exec sha256sum {} \; > "$temp_backup_dir/checksums.sha256"
+                
+                # Update manifest with file list
+                find "$temp_backup_dir/current" -type f | jq -R . | jq -s . > "$temp_backup_dir/file_list.json"
+            else
+                log_error "Failed to backup application files"
+                rm -rf "$temp_backup_dir"
+                return 1
             fi
             
-            # Backup configuration
+            # Backup database if exists
+            local db_path="/var/lib/infra-core/database.db"
+            if [[ -f "$db_path" ]]; then
+                log_info "Backing up database..."
+                if retry_with_backoff 2 3 "database backup" cp "$db_path" "$temp_backup_dir/database.db"; then
+                    sha256sum "$temp_backup_dir/database.db" >> "$temp_backup_dir/checksums.sha256"
+                    log_success "Database backed up successfully"
+                fi
+            fi
+            
+            # Backup Docker volumes if using Docker
+            if [[ "$DEPLOYMENT_TYPE" == "docker" ]] && command -v docker &>/dev/null; then
+                log_info "Backing up Docker volumes..."
+                local volumes_backup="$temp_backup_dir/docker_volumes"
+                mkdir -p "$volumes_backup"
+                
+                # List and backup relevant volumes
+                docker volume ls -q | grep -E "(infra|core)" | while read -r volume; do
+                    if [[ -n "$volume" ]]; then
+                        log_info "Backing up volume: $volume"
+                        docker run --rm \
+                            -v "$volume:/source:ro" \
+                            -v "$volumes_backup:/backup" \
+                            alpine:latest \
+                            tar czf "/backup/$volume.tar.gz" -C /source . 2>/dev/null || true
+                    fi
+                done
+            fi
+            
+            # Backup configuration files
+            log_info "Backing up configuration files..."
+            local config_backup="$temp_backup_dir/config"
+            mkdir -p "$config_backup"
+            
+            # Common config locations
+            local config_files=(
+                "/etc/nginx/sites-available/infra-core"
+                "/etc/systemd/system/infra-core.service"
+                "$DEPLOY_DIR/.env*"
+                "$DEPLOY_DIR/docker-compose*.yml"
+            )
+            
+            for config_file in "${config_files[@]}"; do
+                if [[ -f "$config_file" ]]; then
+                    cp "$config_file" "$config_backup/" 2>/dev/null || true
+                fi
+            done
+            
+            # Compress backup
+            log_info "Compressing backup..."
+            if tar czf "$backup_path.tar.gz" -C "$temp_backup_dir" .; then
+                # Verify backup integrity
+                log_info "Verifying backup integrity..."
+                if tar tzf "$backup_path.tar.gz" >/dev/null 2>&1; then
+                    log_success "Backup created and verified: $backup_name.tar.gz"
+                    
+                    # Create symlink to latest backup
+                    ln -sf "$backup_name.tar.gz" "$BACKUP_DIR/latest-backup.tar.gz"
+                    
+                    # Cleanup old backups (keep last 5)
+                    cleanup_old_backups
+                else
+                    log_error "Backup verification failed"
+                    rm -f "$backup_path.tar.gz"
+                    rm -rf "$temp_backup_dir"
+                    return 1
+                fi
+            else
+                log_error "Failed to compress backup"
+                rm -rf "$temp_backup_dir"
+                return 1
+            fi
+            
+            # Cleanup temp directory
+            rm -rf "$temp_backup_dir"
             if [[ -d "/etc/infra-core" ]]; then
                 cp -r "/etc/infra-core" "$backup_path/"
             fi
@@ -359,6 +710,212 @@ EOF
         else
             log_info "No current deployment to backup"
         fi
+    fi
+}
+
+# Cleanup old backups with retention policy
+cleanup_old_backups() {
+    log_info "Cleaning up old backups..."
+    
+    local max_backups=${BACKUP_RETENTION:-10}
+    local backup_count
+    
+    if [[ -d "$BACKUP_DIR" ]]; then
+        # Count existing backups
+        backup_count=$(find "$BACKUP_DIR" -name "infra-core-backup-*.tar.gz" | wc -l)
+        
+        if [[ $backup_count -gt $max_backups ]]; then
+            log_info "Found $backup_count backups, keeping latest $max_backups"
+            
+            # Remove oldest backups
+            find "$BACKUP_DIR" -name "infra-core-backup-*.tar.gz" -printf '%T@ %p\n' | \
+                sort -n | head -n -"$max_backups" | cut -d' ' -f2- | \
+                xargs -r rm -f
+                
+            log_success "Cleaned up $((backup_count - max_backups)) old backups"
+        else
+            log_info "Backup count ($backup_count) within retention limit ($max_backups)"
+        fi
+        
+        # Cleanup failed/incomplete backups
+        find "$BACKUP_DIR" -name "*.tmp" -o -name "*.partial" | xargs -r rm -f
+        
+        # Show backup storage usage
+        local backup_size
+        backup_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1 || echo "0B")
+        log_info "Total backup storage: $backup_size"
+    fi
+}
+
+# Validate backup before rollback
+validate_backup() {
+    local backup_path="$1"
+    
+    if [[ ! -f "$backup_path" ]]; then
+        log_error "Backup file not found: $backup_path"
+        return 1
+    fi
+    
+    # Check if backup is a valid tar.gz file
+    if ! tar tzf "$backup_path" >/dev/null 2>&1; then
+        log_error "Backup file is corrupted or invalid: $backup_path"
+        return 1
+    fi
+    
+    # Check if backup contains required files
+    local required_files=("current/" "backup-manifest.json")
+    for required_file in "${required_files[@]}"; do
+        if ! tar tzf "$backup_path" | grep -q "^$required_file"; then
+            log_error "Backup missing required file: $required_file"
+            return 1
+        fi
+    done
+    
+    # Verify checksums if available
+    if tar tzf "$backup_path" | grep -q "checksums.sha256"; then
+        log_info "Verifying backup checksums..."
+        local temp_verify="/tmp/backup-verify-$$"
+        mkdir -p "$temp_verify"
+        
+        if tar xzf "$backup_path" -C "$temp_verify" checksums.sha256 current/ 2>/dev/null; then
+            cd "$temp_verify"
+            if sha256sum -c checksums.sha256 --quiet 2>/dev/null; then
+                log_success "Backup checksum verification passed"
+                rm -rf "$temp_verify"
+                return 0
+            else
+                log_warning "Some files failed checksum verification"
+                rm -rf "$temp_verify"
+                return 1
+            fi
+        else
+            log_warning "Could not extract backup for verification"
+            rm -rf "$temp_verify"
+        fi
+    fi
+    
+    log_success "Backup validation completed"
+    return 0
+}
+
+# Enhanced rollback with backup validation and safety checks
+safe_rollback() {
+    local backup_name="$1"
+    log_step "Performing safe rollback to backup: $backup_name"
+    
+    # Find backup file
+    local backup_file=""
+    if [[ -f "$BACKUP_DIR/$backup_name.tar.gz" ]]; then
+        backup_file="$BACKUP_DIR/$backup_name.tar.gz"
+    elif [[ -f "$BACKUP_DIR/$backup_name" ]]; then
+        backup_file="$BACKUP_DIR/$backup_name"
+    elif [[ "$backup_name" == "latest" ]] && [[ -L "$BACKUP_DIR/latest-backup.tar.gz" ]]; then
+        backup_file="$BACKUP_DIR/latest-backup.tar.gz"
+    else
+        log_error "Backup not found: $backup_name"
+        return 1
+    fi
+    
+    # Validate backup before proceeding
+    if ! validate_backup "$backup_file"; then
+        log_error "Backup validation failed, aborting rollback"
+        return 1
+    fi
+    
+    # Create safety backup of current state
+    log_info "Creating safety backup of current state..."
+    local safety_backup="$BACKUP_DIR/pre-rollback-$(date +%Y%m%d-%H%M%S)"
+    if [[ -d "$DEPLOY_DIR/current" ]]; then
+        tar czf "$safety_backup.tar.gz" -C "$DEPLOY_DIR" current/ || {
+            log_warning "Failed to create safety backup"
+        }
+    fi
+    
+    # Stop services gracefully
+    log_info "Stopping services for rollback..."
+    if ! retry_with_backoff 3 5 "service stop" stop_services; then
+        log_error "Failed to stop services, aborting rollback"
+        return 1
+    fi
+    
+    # Extract backup to temporary location
+    local temp_restore="/tmp/restore-$$"
+    mkdir -p "$temp_restore"
+    
+    log_info "Extracting backup..."
+    if ! tar xzf "$backup_file" -C "$temp_restore"; then
+        log_error "Failed to extract backup"
+        rm -rf "$temp_restore"
+        return 1
+    fi
+    
+    # Backup current deployment and restore from backup
+    if [[ -d "$DEPLOY_DIR/current" ]]; then
+        if [[ -d "$DEPLOY_DIR/previous" ]]; then
+            rm -rf "$DEPLOY_DIR/previous"
+        fi
+        mv "$DEPLOY_DIR/current" "$DEPLOY_DIR/previous"
+    fi
+    
+    # Move restored files to current location
+    if [[ -d "$temp_restore/current" ]]; then
+        mv "$temp_restore/current" "$DEPLOY_DIR/current"
+        chown -R "$SERVICE_USER:$SERVICE_USER" "$DEPLOY_DIR/current"
+        
+        # Restore database if present in backup
+        if [[ -f "$temp_restore/database.db" ]]; then
+            log_info "Restoring database..."
+            mkdir -p "/var/lib/infra-core"
+            cp "$temp_restore/database.db" "/var/lib/infra-core/database.db"
+            chown "$SERVICE_USER:$SERVICE_USER" "/var/lib/infra-core/database.db"
+        fi
+        
+        # Restore Docker volumes if present
+        if [[ -d "$temp_restore/docker_volumes" ]] && command -v docker &>/dev/null; then
+            log_info "Restoring Docker volumes..."
+            for volume_archive in "$temp_restore/docker_volumes"/*.tar.gz; do
+                if [[ -f "$volume_archive" ]]; then
+                    local volume_name
+                    volume_name=$(basename "$volume_archive" .tar.gz)
+                    
+                    # Create volume if it doesn't exist
+                    docker volume create "$volume_name" 2>/dev/null || true
+                    
+                    # Restore volume content
+                    docker run --rm \
+                        -v "$volume_name:/target" \
+                        -v "$temp_restore/docker_volumes:/backup" \
+                        alpine:latest \
+                        sh -c "cd /target && tar xzf /backup/$volume_name.tar.gz" 2>/dev/null || true
+                fi
+            done
+        fi
+        
+        log_success "Backup restored successfully"
+    else
+        log_error "Invalid backup structure"
+        rm -rf "$temp_restore"
+        return 1
+    fi
+    
+    # Cleanup temp directory
+    rm -rf "$temp_restore"
+    
+    # Start services
+    log_info "Starting services after rollback..."
+    if retry_with_backoff 3 10 "service start" start_services; then
+        log_success "Rollback completed successfully"
+        
+        # Verify deployment health
+        sleep 10
+        if verify_deployment_health; then
+            log_success "Rollback verification passed"
+        else
+            log_warning "Rollback completed but health check failed"
+        fi
+    else
+        log_error "Failed to start services after rollback"
+        return 1
     fi
 }
 
@@ -403,20 +960,59 @@ update_repository() {
 EOF
 }
 
-# Build Docker images with mirror optimization
+# Advanced network environment detection
+detect_optimal_region() {
+    local china_sites=("baidu.com" "qq.com" "taobao.com" "163.com")
+    local global_sites=("google.com" "github.com" "cloudflare.com")
+    local china_score=0
+    local global_score=0
+    
+    log_info "Detecting optimal mirror region..."
+    
+    # Test China sites
+    for site in "${china_sites[@]}"; do
+        if timeout 5 ping -c 1 -W 2 "$site" &>/dev/null; then
+            china_score=$((china_score + 1))
+            log_info "✓ Chinese site $site accessible"
+        fi
+    done
+    
+    # Test global sites  
+    for site in "${global_sites[@]}"; do
+        if timeout 5 ping -c 1 -W 2 "$site" &>/dev/null; then
+            global_score=$((global_score + 1))
+            log_info "✓ Global site $site accessible"
+        fi
+    done
+    
+    # Speed test for mirror selection
+    local mirror_speeds=()
+    
+    # Test Alpine mirror speeds
+    log_info "Testing mirror speeds..."
+    for mirror in "mirrors.tuna.tsinghua.edu.cn" "mirrors.ustc.edu.cn" "dl-cdn.alpinelinux.org"; do
+        local speed=$(timeout 10 curl -s -w "%{time_total}" -o /dev/null "https://$mirror/alpine/v3.18/main/x86_64/APKINDEX.tar.gz" 2>/dev/null || echo "999")
+        mirror_speeds+=("$mirror:$speed")
+        log_info "Mirror $mirror response time: ${speed}s"
+    done
+    
+    # Determine best region
+    if [[ $china_score -ge 2 ]] && [[ $china_score -gt $global_score ]]; then
+        echo "cn"
+        log_success "Selected Chinese mirrors (china_score=$china_score, global_score=$global_score)"
+    else
+        echo "global" 
+        log_success "Selected global mirrors (china_score=$china_score, global_score=$global_score)"
+    fi
+}
+
+# Build Docker images with intelligent mirror optimization  
 build_with_mirrors() {
     log_step "Building Docker images with optimized mirrors..."
     
-    # Detect region for mirror selection
-    local region="auto"
-    
-    # Try to detect if we're in China by checking common Chinese domains
-    if ping -c 1 -W 2 baidu.com >/dev/null 2>&1 || ping -c 1 -W 2 qq.com >/dev/null 2>&1; then
-        region="cn"
-        log_info "Detected Chinese network environment, using Chinese mirrors"
-    else
-        log_info "Using global mirrors with fallback"
-    fi
+    # Detect optimal region with enhanced logic
+    local region
+    region=$(retry_with_backoff 2 3 "network detection" detect_optimal_region)
     
     # Create temporary docker-compose override for build args
     local compose_override="docker-compose.build-override.yml"
@@ -453,22 +1049,223 @@ EOF
             ;;
     esac
     
-    # Build with the appropriate configuration
-    log_info "Starting Docker build process..."
-    if docker-compose -f docker-compose.yml -f "$compose_override" build --no-cache; then
-        log_success "Docker images built successfully"
-    else
-        log_warning "Build failed with optimized mirrors, trying standard build..."
-        if docker-compose -f docker-compose.yml build --no-cache; then
-            log_success "Docker images built with standard configuration"
+    # Enhanced Docker build with retry and optimization
+    log_info "Starting robust Docker build process..."
+    
+    # Pre-build optimizations
+    log_info "Optimizing Docker build environment..."
+    
+    # Enable buildkit for better performance and caching
+    export DOCKER_BUILDKIT=1
+    export COMPOSE_DOCKER_CLI_BUILD=1
+    
+    # Clean up build cache if needed (on build failures)
+    local cleanup_cache=false
+    
+    # Build strategies to try in order
+    local build_strategies=(
+        "optimized_with_cache"
+        "optimized_no_cache" 
+        "standard_with_cache"
+        "standard_no_cache"
+        "fallback_minimal"
+    )
+    
+    local build_success=false
+    
+    for strategy in "${build_strategies[@]}"; do
+        log_info "Trying build strategy: $strategy"
+        
+        local build_cmd=""
+        local timeout_duration="$DOCKER_TIMEOUT"
+        
+        case "$strategy" in
+            "optimized_with_cache")
+                build_cmd="docker-compose -f docker-compose.yml -f $compose_override build --parallel"
+                timeout_duration=900
+                ;;
+            "optimized_no_cache")
+                build_cmd="docker-compose -f docker-compose.yml -f $compose_override build --no-cache --parallel"
+                timeout_duration=1200
+                ;;
+            "standard_with_cache")
+                build_cmd="docker-compose -f docker-compose.yml build --parallel"
+                timeout_duration=900
+                ;;
+            "standard_no_cache")
+                build_cmd="docker-compose -f docker-compose.yml build --no-cache --parallel" 
+                timeout_duration=1200
+                ;;
+            "fallback_minimal")
+                # Clear build cache and try minimal build
+                log_warning "Attempting fallback build with cache cleanup..."
+                docker builder prune -f 2>/dev/null || true
+                docker system prune -f 2>/dev/null || true
+                build_cmd="docker-compose -f docker-compose.yml build --no-cache"
+                timeout_duration=1800
+                ;;
+        esac
+        
+        # Execute build with timeout and retry
+        if retry_with_backoff 2 30 "Docker build ($strategy)" safe_execute "$timeout_duration" "Docker build" $build_cmd; then
+            log_success "Docker build completed successfully with strategy: $strategy"
+            build_success=true
+            
+            # Verify images were created
+            log_info "Verifying created images..."
+            if docker-compose -f docker-compose.yml config --services | while read -r service; do
+                local image_name
+                image_name=$(docker-compose -f docker-compose.yml config | grep -A 10 "^  $service:" | grep "image:" | awk '{print $2}' | head -1)
+                
+                if [[ -n "$image_name" ]] && docker image inspect "$image_name" >/dev/null 2>&1; then
+                    log_success "Image verified: $image_name"
+                else
+                    log_error "Image verification failed: $image_name"
+                    return 1
+                fi
+            done; then
+                log_success "All images verified successfully"
+                break
+            else
+                log_error "Image verification failed"
+                build_success=false
+                continue
+            fi
         else
-            log_error "Docker build failed completely"
-            return 1
+            log_warning "Build strategy '$strategy' failed, trying next..."
+            
+            # Clean up partial builds
+            docker-compose -f docker-compose.yml down --remove-orphans 2>/dev/null || true
+            
+            # For failed builds, clean cache before next attempt
+            if [[ "$strategy" =~ "cache" ]]; then
+                docker builder prune -f 2>/dev/null || true
+            fi
+            
+            continue
         fi
+    done
+    
+    if [[ "$build_success" != "true" ]]; then
+        log_error "All Docker build strategies failed"
+        
+        # Diagnostic information
+        log_error "=== Build Diagnostics ==="
+        docker version 2>/dev/null || log_error "Docker version check failed"
+        docker info 2>/dev/null || log_error "Docker info check failed" 
+        df -h 2>/dev/null || log_error "Disk space check failed"
+        
+        return 1
     fi
+    
+    # Post-build optimizations
+    log_info "Optimizing built images..."
+    
+    # Remove intermediate/dangling images
+    docker image prune -f 2>/dev/null || true
+    
+    # Show final image sizes
+    log_info "Final image sizes:"
+    docker-compose -f docker-compose.yml config --services | while read -r service; do
+        local image_name
+        image_name=$(docker-compose -f docker-compose.yml config | grep -A 10 "^  $service:" | grep "image:" | awk '{print $2}' | head -1)
+        if [[ -n "$image_name" ]]; then
+            docker images "$image_name" --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}" | tail -n +2
+        fi
+    done
     
     # Cleanup temporary file
     rm -f "$compose_override"
+}
+
+# Comprehensive deployment health verification
+verify_deployment_health() {
+    log_step "Verifying deployment health..."
+    
+    local health_score=0
+    local max_score=8
+    
+    # Wait for services to initialize
+    sleep 10
+    
+    # Check Docker containers if using Docker
+    if [[ "$DEPLOYMENT_TYPE" == "docker" ]] && command -v docker &>/dev/null; then
+        log_info "Checking Docker container health..."
+        
+        if docker-compose -f docker-compose.yml ps | grep -q "Up"; then
+            health_score=$((health_score + 2))
+            log_success "Docker containers are running"
+        else
+            log_error "Docker containers are not running properly"
+        fi
+    fi
+    
+    # Check HTTP endpoints
+    local endpoints=("http://localhost:8080/health" "http://localhost:3000" "http://localhost:80")
+    local healthy_endpoints=0
+    
+    for endpoint in "${endpoints[@]}"; do
+        if curl -s --connect-timeout 5 --max-time 10 "$endpoint" >/dev/null 2>&1; then
+            healthy_endpoints=$((healthy_endpoints + 1))
+            log_success "Endpoint $endpoint is responding"
+        fi
+    done
+    
+    if [[ $healthy_endpoints -gt 0 ]]; then
+        health_score=$((health_score + 2))
+    fi
+    
+    # Check disk space
+    local disk_usage
+    disk_usage=$(df "$DEPLOY_DIR" | awk 'NR==2{print $(NF-1)}' | tr -d '%')
+    
+    if [[ $disk_usage -lt 90 ]]; then
+        health_score=$((health_score + 1))
+        log_success "Disk usage is healthy: ${disk_usage}%"
+    else
+        log_warning "Disk usage is high: ${disk_usage}%"
+    fi
+    
+    # Check memory usage
+    local memory_usage
+    memory_usage=$(free | awk 'NR==2{printf "%.0f", $3*100/$2}')
+    
+    if [[ $memory_usage -lt 85 ]]; then
+        health_score=$((health_score + 1))
+        log_success "Memory usage is healthy: ${memory_usage}%"
+    else
+        log_warning "Memory usage is high: ${memory_usage}%"
+    fi
+    
+    # Check file ownership
+    if [[ -d "$DEPLOY_DIR/current" ]] && [[ "$(stat -c %U "$DEPLOY_DIR/current")" == "$SERVICE_USER" ]]; then
+        health_score=$((health_score + 1))
+        log_success "File ownership is correct"
+    fi
+    
+    # Check log files for recent errors
+    local error_count=0
+    if [[ -f "$LOG_FILE" ]]; then
+        error_count=$(tail -20 "$LOG_FILE" | grep -i error | wc -l || echo "0")
+    fi
+    
+    if [[ $error_count -eq 0 ]]; then
+        health_score=$((health_score + 1))
+        log_success "No recent errors in logs"
+    fi
+    
+    # Calculate health percentage
+    local health_percentage=$((health_score * 100 / max_score))
+    
+    log_info "Health Score: $health_score/$max_score ($health_percentage%)"
+    
+    if [[ $health_percentage -ge 75 ]]; then
+        log_success "Deployment health check PASSED"
+        return 0
+    else
+        log_warning "Deployment health check FAILED"
+        return 1
+    fi
 }
 
 # Docker deployment
@@ -829,8 +1626,9 @@ main_deploy() {
     log_info "  Deploy Directory: $DEPLOY_DIR"
     log_info "  Service User: $SERVICE_USER"
     
-    # Check requirements
-    check_requirements
+    # Enhanced system validation
+    validate_system_requirements
+    validate_dependencies
     
     # Install dependencies
     install_dependencies
@@ -852,7 +1650,12 @@ main_deploy() {
         deploy_binary
     fi
     
-    log_success "🎉 InfraCore deployment completed successfully!"
+    # Post-deployment validation
+    if verify_deployment_health; then
+        log_success "🎉 InfraCore deployment completed successfully and health check passed!"
+    else
+        log_warning "Deployment completed but health check failed. Please review the system."
+    fi
     
     # Show final status
     show_status
