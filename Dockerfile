@@ -1,60 +1,77 @@
 # Build stage for Go applications
 FROM golang:1.24.5-alpine AS go-builder
 
+# Build arguments for mirror selection
+ARG BUILD_REGION=auto
+ARG ALPINE_MIRROR=""
+ARG GO_PROXY=""
+
 WORKDIR /app
 
-# Install dependencies for building with retry mechanism and multiple mirrors
+# Install dependencies with smart mirror selection
 RUN set -eux; \
-    # Try Alpine mirrors one by one (sh-compatible syntax)
-    for mirror in \
-        "https://dl-cdn.alpinelinux.org/alpine" \
-        "https://mirrors.tuna.tsinghua.edu.cn/alpine" \
-        "https://mirrors.ustc.edu.cn/alpine" \
-        "https://mirrors.aliyun.com/alpine" \
-        "https://mirror.nju.edu.cn/alpine"; do \
-        echo "Trying mirror: $mirror"; \
-        echo "$mirror/v3.22/main" > /etc/apk/repositories && \
-        echo "$mirror/v3.22/community" >> /etc/apk/repositories && \
-        # Test the mirror with update
-        if apk update --no-cache 2>/dev/null; then \
-            echo "Successfully using mirror: $mirror"; \
-            # Install packages
-            if apk add --no-cache git ca-certificates; then \
-                echo "Packages installed successfully with mirror: $mirror"; \
+    # Configure Alpine mirror based on build arguments or auto-detect
+    if [ -n "$ALPINE_MIRROR" ]; then \
+        echo "Using specified Alpine mirror: $ALPINE_MIRROR"; \
+        echo "$ALPINE_MIRROR/v3.22/main" > /etc/apk/repositories; \
+        echo "$ALPINE_MIRROR/v3.22/community" >> /etc/apk/repositories; \
+    elif [ "$BUILD_REGION" = "cn" ]; then \
+        echo "Using Chinese Alpine mirror"; \
+        echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/main" > /etc/apk/repositories; \
+        echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/community" >> /etc/apk/repositories; \
+    fi; \
+    # Install packages with fallback
+    apk update --no-cache || { \
+        echo "Primary mirror failed, trying fallback mirrors..."; \
+        for mirror in \
+            "https://dl-cdn.alpinelinux.org/alpine" \
+            "https://mirrors.ustc.edu.cn/alpine" \
+            "https://mirrors.aliyun.com/alpine"; do \
+            echo "Trying fallback mirror: $mirror"; \
+            echo "$mirror/v3.22/main" > /etc/apk/repositories; \
+            echo "$mirror/v3.22/community" >> /etc/apk/repositories; \
+            if apk update --no-cache 2>/dev/null; then \
+                echo "Fallback mirror $mirror works"; \
                 break; \
-            else \
-                echo "Package installation failed with mirror: $mirror, trying next..."; \
             fi; \
-        else \
-            echo "Mirror $mirror failed, trying next..."; \
-        fi; \
-    done; \
-    # Verify git is installed
+        done; \
+    }; \
+    apk add --no-cache git ca-certificates; \
     git --version
 
 # Copy go mod files first for better layer caching
 COPY go.mod go.sum ./
 
-# Download dependencies with retry mechanism and Go proxy mirrors
+# Download dependencies with smart Go proxy selection
 RUN set -eux; \
-    # Try Go module proxies one by one (sh-compatible syntax)
-    for proxy in \
-        "https://proxy.golang.org,direct" \
-        "https://goproxy.cn,direct" \
-        "https://mirrors.aliyun.com/goproxy/,direct" \
-        "https://goproxy.io,direct"; do \
-        echo "Trying Go proxy: $proxy"; \
-        export GOPROXY="$proxy"; \
-        export GOSUMDB="sum.golang.org"; \
-        if go mod download && go mod verify; then \
-            echo "Go modules downloaded successfully with proxy: $proxy"; \
-            break; \
-        else \
-            echo "Go proxy $proxy failed, trying next..."; \
-            go clean -modcache; \
-            sleep 3; \
-        fi; \
-    done
+    # Configure Go proxy based on build arguments or region
+    if [ -n "$GO_PROXY" ]; then \
+        echo "Using specified Go proxy: $GO_PROXY"; \
+        export GOPROXY="$GO_PROXY"; \
+    elif [ "$BUILD_REGION" = "cn" ]; then \
+        echo "Using Chinese Go proxy"; \
+        export GOPROXY="https://goproxy.cn,direct"; \
+    else \
+        export GOPROXY="https://proxy.golang.org,direct"; \
+    fi; \
+    export GOSUMDB="sum.golang.org"; \
+    # Download with fallback
+    go mod download && go mod verify || { \
+        echo "Primary Go proxy failed, trying fallbacks..."; \
+        for proxy in \
+            "https://goproxy.io,direct" \
+            "https://mirrors.aliyun.com/goproxy/,direct" \
+            "https://proxy.golang.org,direct"; do \
+            echo "Trying fallback proxy: $proxy"; \
+            export GOPROXY="$proxy"; \
+            if go mod download && go mod verify; then \
+                echo "Fallback proxy $proxy works"; \
+                break; \
+            else \
+                go clean -modcache; \
+            fi; \
+        done; \
+    }
 
 # Copy source code
 COPY . .
@@ -75,37 +92,46 @@ RUN set -eux; \
 # Build stage for Node.js frontend
 FROM node:20-alpine AS node-builder
 
+# Build arguments for NPM registry
+ARG NPM_REGISTRY=""
+ARG BUILD_REGION=""
+
 WORKDIR /app/ui
 
 # Copy package files
 COPY ui/package*.json ./
 
-# Install npm dependencies with retry mechanism and multiple registries
+# Install npm dependencies with smart registry selection
 RUN set -eux; \
     # Configure npm for better reliability
     npm config set fetch-timeout 300000; \
     npm config set fetch-retry-mintimeout 20000; \
     npm config set fetch-retry-maxtimeout 120000; \
-    # Try npm registries one by one (sh-compatible syntax)
-    for registry in \
-        "https://registry.npmjs.org/" \
-        "https://registry.npmmirror.com/" \
-        "https://mirrors.tuna.tsinghua.edu.cn/npm/" \
-        "https://mirrors.ustc.edu.cn/npm/" \
-        "https://registry.npm.taobao.org/"; do \
-        echo "Trying npm registry: $registry"; \
-        npm config set registry "$registry"; \
-        if npm ci --no-audit --no-fund; then \
-            echo "npm packages installed successfully with registry: $registry"; \
-            break; \
-        else \
-            echo "npm registry $registry failed, trying next..."; \
+    # Configure NPM registry based on build arguments or region
+    if [ -n "$NPM_REGISTRY" ]; then \
+        echo "Using specified NPM registry: $NPM_REGISTRY"; \
+        npm config set registry "$NPM_REGISTRY"; \
+    elif [ "$BUILD_REGION" = "cn" ]; then \
+        echo "Using Chinese NPM registry"; \
+        npm config set registry "https://registry.npmmirror.com/"; \
+    fi; \
+    # Install with fallback
+    npm ci --no-audit --no-fund || { \
+        echo "Primary NPM registry failed, trying fallbacks..."; \
+        for registry in \
+            "https://registry.npmjs.org/" \
+            "https://registry.npmmirror.com/" \
+            "https://mirrors.ustc.edu.cn/npm/"; do \
+            echo "Trying fallback registry: $registry"; \
+            npm config set registry "$registry"; \
             npm cache clean --force; \
-            sleep 5; \
-        fi; \
-    done; \
-    # Verify node_modules exists
-    ls -la node_modules/ | head -5
+            if npm ci --no-audit --no-fund; then \
+                echo "Fallback registry $registry works"; \
+                break; \
+            fi; \
+        done; \
+    }; \
+    ls -la node_modules/ | head -3
 
 # Copy source code and build
 COPY ui/ ./

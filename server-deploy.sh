@@ -424,10 +424,10 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
+        - BUILD_REGION=cn
         - ALPINE_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
         - GO_PROXY=https://goproxy.cn,direct
         - NPM_REGISTRY=https://registry.npmmirror.com/
-    network_mode: host
 EOF
             ;;
         *)
@@ -439,7 +439,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    network_mode: host
+      args:
+        - BUILD_REGION=global
 EOF
             ;;
     esac
