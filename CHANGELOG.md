@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 
 
+### [0.1.1-beta.1](https://github.com/Last-emo-boy/infra-core/compare/v0.1.1-beta.0...v0.1.1-beta.1) (2025-09-24)
+
+
+### Bug Fixes
+
+* ensure log directory exists before first log output ([bd05944](https://github.com/Last-emo-boy/infra-core/commit/bd05944bab2474ce71ebf47b4ae5317e7ef613ee))
+
 ### [0.1.1-beta.0](https://github.com/Last-emo-boy/infra-core/compare/v0.1.0...v0.1.1-beta.0) (2025-09-24)
 
 
