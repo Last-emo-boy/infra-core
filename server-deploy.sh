@@ -25,24 +25,36 @@ PURPLE='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Functions for colored output
+# Create log directory if it doesn't exist
+ensure_log_dir() {
+    if [[ ! -d "$(dirname "$LOG_FILE")" ]]; then
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+    fi
+}
+
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1" | tee -a "$LOG_FILE"
+    ensure_log_dir
+    echo -e "${BLUE}[INFO]${NC} $1" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1" | tee -a "$LOG_FILE"
+    ensure_log_dir
+    echo -e "${GREEN}[SUCCESS]${NC} $1" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1" | tee -a "$LOG_FILE"
+    ensure_log_dir
+    echo -e "${YELLOW}[WARNING]${NC} $1" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE"
+    ensure_log_dir
+    echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${RED}[ERROR]${NC} $1"
 }
 
 log_step() {
-    echo -e "${PURPLE}[STEP]${NC} $1" | tee -a "$LOG_FILE"
+    ensure_log_dir
+    echo -e "${PURPLE}[STEP]${NC} $1" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${PURPLE}[STEP]${NC} $1"
 }
 
 # Show usage information
@@ -779,6 +791,9 @@ main() {
     
     # Parse arguments
     parse_args "$@"
+    
+    # Ensure basic log directory exists early
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
     
     # Check root access
     check_root
