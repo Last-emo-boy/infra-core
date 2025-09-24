@@ -127,16 +127,21 @@ jobs:
         mkdir -p test-results
         golangci-lint run --timeout=5m --out-format=github-actions 2>&1 | tee test-results/golangci-lint.log || echo "Linting completed with issues"
     
-    - name: Security scan
+    - name: Run Gosec Security Scanner
+      uses: securego/gosec@master
+      with:
+        args: '-fmt sarif -out test-results/gosec-results.sarif ./...'
+    
+    - name: Ensure SARIF file exists
       run: |
-        go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
         # Ensure the directory exists
         mkdir -p test-results
-        # Run gosec and create SARIF file, but don't fail if there are issues
-        gosec -no-fail -fmt sarif -out test-results/gosec-results.sarif ./... || echo "Security scan completed with warnings"
         # Create empty SARIF file if none was created
         if [ ! -f test-results/gosec-results.sarif ]; then
-          echo '{"version": "2.1.0", "runs": []}' > test-results/gosec-results.sarif
+          echo '{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "gosec", "version": "unavailable"}}, "results": []}]}' > test-results/gosec-results.sarif
+          echo "⚠️ Created empty SARIF file as fallback"
+        else
+          echo "✅ Gosec SARIF file generated successfully"
         fi
     
     - name: Upload test results
