@@ -312,7 +312,7 @@ func TestExecuteHTTPProbe(t *testing.T) {
 	// Create a test HTTP server
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	}))
 	defer testServer.Close()
 	
@@ -378,7 +378,7 @@ func TestExecuteHTTPProbeWrongStatus(t *testing.T) {
 	// Create a test HTTP server that returns 500
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Error"))
+		_, _ = w.Write([]byte("Error"))
 	}))
 	defer testServer.Close()
 	

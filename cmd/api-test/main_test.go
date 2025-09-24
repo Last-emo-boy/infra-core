@@ -24,7 +24,7 @@ func TestHealthCheckEndpoint(t *testing.T) {
 				"service":   "infra-core-console",
 				"timestamp": time.Now().Unix(),
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -64,7 +64,7 @@ func TestRootEndpoint(t *testing.T) {
 				"environment": "development",
 				"time":        time.Now().UTC().Format(time.RFC3339),
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -109,7 +109,7 @@ func TestResponseReading(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(testData))
+		_, _ = w.Write([]byte(testData))
 	}))
 	defer server.Close()
 	
@@ -135,7 +135,7 @@ func TestErrorHandling(t *testing.T) {
 			name: "server error",
 			serverBehavior: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte("Internal Server Error"))
+				_, _ = w.Write([]byte("Internal Server Error"))
 			},
 			expectedStatus: http.StatusInternalServerError,
 		},
@@ -143,7 +143,7 @@ func TestErrorHandling(t *testing.T) {
 			name: "not found",
 			serverBehavior: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusNotFound)
-				w.Write([]byte("Not Found"))
+				_, _ = w.Write([]byte("Not Found"))
 			},
 			expectedStatus: http.StatusNotFound,
 		},
@@ -151,7 +151,7 @@ func TestErrorHandling(t *testing.T) {
 			name: "bad request",
 			serverBehavior: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte("Bad Request"))
+				_, _ = w.Write([]byte("Bad Request"))
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
@@ -253,7 +253,7 @@ func TestHTTPMethods(t *testing.T) {
 			"method": r.Method,
 			"path":   r.URL.Path,
 		}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 	
@@ -287,7 +287,7 @@ func TestResponseHeaders(t *testing.T) {
 		w.Header().Set("X-Service", "infra-core-console")
 		w.Header().Set("X-Version", "1.0.0")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer server.Close()
 	
@@ -306,7 +306,7 @@ func TestTimeoutHandling(t *testing.T) {
 		// Simulate a slow response
 		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"slow"}`))
+		_, _ = w.Write([]byte(`{"status":"slow"}`))
 	}))
 	defer server.Close()
 	
@@ -338,7 +338,7 @@ func TestUserAgentHeader(t *testing.T) {
 		response := map[string]string{
 			"user_agent": r.UserAgent(),
 		}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 	
@@ -379,7 +379,7 @@ func TestResponseBodySize(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusOK)
-				w.Write(data)
+				_, _ = w.Write(data)
 			}))
 			defer server.Close()
 			

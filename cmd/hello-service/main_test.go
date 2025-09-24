@@ -316,21 +316,21 @@ func TestEndpointAvailability(t *testing.T) {
 	// Main page
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("main page"))
+		_, _ = w.Write([]byte("main page"))
 	})
 	
 	// Health check
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"healthy"}`))
+		_, _ = w.Write([]byte(`{"status":"healthy"}`))
 	})
 	
 	// API info
 	mux.HandleFunc("/api/info", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"service":"hello"}`))
+		_, _ = w.Write([]byte(`{"service":"hello"}`))
 	})
 	
 	server := httptest.NewServer(mux)

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -40,7 +41,10 @@ func AuthMiddleware(authService *auth.Auth, db *database.DB) gin.HandlerFunc {
 			}
 
 			// Update last used timestamp
-			sessionRepo.UpdateLastUsed(session.ID)
+			if err := sessionRepo.UpdateLastUsed(session.ID); err != nil {
+				// Log but don't fail the request
+				log.Printf("Failed to update session last used time: %v", err)
+			}
 		}
 
 		// Add user info to context
@@ -106,7 +110,10 @@ func SSOAuthMiddleware(authService *auth.Auth, db *database.DB) gin.HandlerFunc 
 			}
 
 			// Update last used timestamp
-			sessionRepo.UpdateLastUsed(session.ID)
+			if err := sessionRepo.UpdateLastUsed(session.ID); err != nil {
+				// Log but don't fail the request
+				log.Printf("Failed to update session last used time: %v", err)
+			}
 		}
 
 		// Add user info to context

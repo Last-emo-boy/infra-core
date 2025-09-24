@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func createTestConfig(t *testing.T) string {
@@ -83,8 +85,12 @@ func TestLoad(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	originalWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(originalWd)
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+	defer func() {
+		err := os.Chdir(originalWd)
+		require.NoError(t, err)
+	}()
 
 	// Reset global config
 	globalConfig = nil
@@ -96,7 +102,7 @@ func TestLoad(t *testing.T) {
 	}
 
 	if config == nil {
-		t.Error("Configuration should not be nil")
+		t.Fatal("Configuration should not be nil")
 	}
 
 	// Verify some default values
@@ -111,8 +117,12 @@ func TestLoadWithEnvironmentVariables(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	originalWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(originalWd)
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+	defer func() {
+		err := os.Chdir(originalWd)
+		require.NoError(t, err)
+	}()
 
 	// Reset global config
 	globalConfig = nil
@@ -273,8 +283,12 @@ func TestGetAfterLoad(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	originalWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(originalWd)
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+	defer func() {
+		err := os.Chdir(originalWd)
+		require.NoError(t, err)
+	}()
 
 	// Reset global config
 	globalConfig = nil

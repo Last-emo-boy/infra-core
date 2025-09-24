@@ -256,14 +256,6 @@ func TestGetStats(t *testing.T) {
 	}
 }
 
-func getKeys(m map[string]interface{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // RegisteredServiceRepository Tests
 
 func TestRegisteredServiceRepository_Create(t *testing.T) {

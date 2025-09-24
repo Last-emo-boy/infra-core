@@ -196,7 +196,7 @@ func TestACMEHandler(t *testing.T) {
 	// Create a mock router
 	mockRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("regular route"))
+		_, _ = w.Write([]byte("regular route"))
 	})
 	
 	// Create ACME handler (simplified version)

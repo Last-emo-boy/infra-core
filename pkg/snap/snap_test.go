@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,7 +20,7 @@ import (
 
 func TestNewSnapManager(t *testing.T) {
 	// Create temporary directory for testing
-	tempDir, err := ioutil.TempDir("", "snap_test_")
+	tempDir, err := os.MkdirTemp("", "snap_test_")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	
@@ -38,7 +37,7 @@ func TestNewSnapManager(t *testing.T) {
 }
 
 func TestSnapManagerLifecycle(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "snap_lifecycle_test_")
+	tempDir, err := os.MkdirTemp("", "snap_lifecycle_test_")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	
@@ -64,7 +63,7 @@ func TestSnapManagerLifecycle(t *testing.T) {
 }
 
 func TestBlockStoreOperations(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "blockstore_test_")
+	tempDir, err := os.MkdirTemp("", "blockstore_test_")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	
@@ -222,7 +221,7 @@ func TestRestoreJobJSONSerialization(t *testing.T) {
 }
 
 func TestSnapManagerConfiguration(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "snap_config_test_")
+	tempDir, err := os.MkdirTemp("", "snap_config_test_")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	
@@ -241,14 +240,14 @@ func TestSnapManagerConfiguration(t *testing.T) {
 }
 
 func TestProcessFileInternal(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "snap_process_test_")
+	tempDir, err := os.MkdirTemp("", "snap_process_test_")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	
 	// Create some test files
 	testFile := filepath.Join(tempDir, "test.txt")
 	testContent := []byte("test content for processing")
-	err = ioutil.WriteFile(testFile, testContent, 0644)
+	err = os.WriteFile(testFile, testContent, 0644)
 	require.NoError(t, err)
 	
 	db := &sqlx.DB{}
@@ -276,7 +275,7 @@ func TestRestoreStatusConstants(t *testing.T) {
 }
 
 func TestBlockStoreRetrieveBlock(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "blockstore_retrieve_test_")
+	tempDir, err := os.MkdirTemp("", "blockstore_retrieve_test_")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	
@@ -300,7 +299,7 @@ func TestBlockStoreRetrieveBlock(t *testing.T) {
 }
 
 func TestSnapManagerStopBeforeStart(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "snap_stop_test_")
+	tempDir, err := os.MkdirTemp("", "snap_stop_test_")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	
@@ -380,7 +379,7 @@ func TestRestoreJobValidation(t *testing.T) {
 }
 
 func TestBlockStoreRebuildIndex(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "blockstore_rebuild_test_")
+	tempDir, err := os.MkdirTemp("", "blockstore_rebuild_test_")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	
@@ -391,7 +390,7 @@ func TestBlockStoreRebuildIndex(t *testing.T) {
 	
 	// Create a fake block file
 	blockFile := filepath.Join(blockDir, "abcd1234567890abcd1234567890abcd1234567890abcd1234567890abcd1234.block")
-	err = ioutil.WriteFile(blockFile, []byte("test data"), 0644)
+	err = os.WriteFile(blockFile, []byte("test data"), 0644)
 	require.NoError(t, err)
 	
 	// Create block store and verify it rebuilds the index
@@ -446,7 +445,7 @@ func TestSymlinkFileEntry(t *testing.T) {
 }
 
 func TestVerifyBlockIntegrity(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "verify_block_test_")
+	tempDir, err := os.MkdirTemp("", "verify_block_test_")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	

@@ -197,7 +197,10 @@ func (o *Orchestrator) RemoveService(c *gin.Context) {
 
 	// Stop service if running
 	if service.Status == "running" {
-		o.stopServiceInstance(service)
+		if err := o.stopServiceInstance(service); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to stop service: %v", err)})
+			return
+		}
 	}
 
 	// Remove from services map

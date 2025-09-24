@@ -161,7 +161,9 @@ func (o *Orchestrator) Stop() {
 	// Stop all services
 	for _, service := range o.services {
 		if service.Status == "running" {
-			o.stopServiceInstance(service)
+			if err := o.stopServiceInstance(service); err != nil {
+				log.Printf("Failed to stop service %s: %v", service.ID, err)
+			}
 		}
 	}
 

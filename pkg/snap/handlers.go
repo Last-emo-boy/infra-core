@@ -3,6 +3,7 @@ package snap
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -118,7 +119,9 @@ func (sm *SnapManager) ListPlans(c *gin.Context) {
 		}
 
 		var paths []string
-		json.Unmarshal([]byte(pathsJSON), &paths)
+		if err := json.Unmarshal([]byte(pathsJSON), &paths); err != nil {
+			log.Printf("Failed to unmarshal paths JSON: %v", err)
+		}
 
 		plans = append(plans, gin.H{
 			"id":           id,
@@ -160,7 +163,9 @@ func (sm *SnapManager) GetPlan(c *gin.Context) {
 	}
 
 	var paths []string
-	json.Unmarshal([]byte(pathsJSON), &paths)
+	if err := json.Unmarshal([]byte(pathsJSON), &paths); err != nil {
+		log.Printf("Failed to unmarshal paths JSON: %v", err)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":           planID,
@@ -315,7 +320,9 @@ func (sm *SnapManager) CreateSnapshot(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Plan not found"})
 			return
 		}
-		json.Unmarshal([]byte(pathsJSON), &paths)
+		if err := json.Unmarshal([]byte(pathsJSON), &paths); err != nil {
+			log.Printf("Failed to unmarshal paths JSON: %v", err)
+		}
 	}
 
 	// Create task
@@ -577,13 +584,19 @@ func (sm *SnapManager) CancelRestore(c *gin.Context) {
 // GetStats gets backup and restore statistics
 func (sm *SnapManager) GetStats(c *gin.Context) {
 	var totalSnapshots, totalSize int64
-	sm.db.QueryRow("SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM snapshots").Scan(&totalSnapshots, &totalSize)
+	if err := sm.db.QueryRow("SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM snapshots").Scan(&totalSnapshots, &totalSize); err != nil {
+		log.Printf("Failed to get snapshot stats: %v", err)
+	}
 
 	var totalPlans int64
-	sm.db.QueryRow("SELECT COUNT(*) FROM snap_plans").Scan(&totalPlans)
+	if err := sm.db.QueryRow("SELECT COUNT(*) FROM snap_plans").Scan(&totalPlans); err != nil {
+		log.Printf("Failed to get total plans count: %v", err)
+	}
 
 	var activePlans int64
-	sm.db.QueryRow("SELECT COUNT(*) FROM snap_plans WHERE enabled = 1").Scan(&activePlans)
+	if err := sm.db.QueryRow("SELECT COUNT(*) FROM snap_plans WHERE enabled = 1").Scan(&activePlans); err != nil {
+		log.Printf("Failed to get active plans count: %v", err)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"total_snapshots": totalSnapshots,
