@@ -5,32 +5,61 @@ WORKDIR /app
 
 # Install dependencies for building with retry mechanism and multiple mirrors
 RUN set -eux; \
-    # Update package index with retries
-    for i in 1 2 3; do \
-        apk update && break || { \
-            echo "Retry $i: apk update failed, retrying in 5s..."; \
-            sleep 5; \
-        } \
+    # Define Alpine mirrors (including Chinese mirrors for better connectivity)
+    MIRRORS=( \
+        "https://dl-cdn.alpinelinux.org/alpine" \
+        "https://mirrors.tuna.tsinghua.edu.cn/alpine" \
+        "https://mirrors.ustc.edu.cn/alpine" \
+        "https://mirrors.aliyun.com/alpine" \
+        "https://mirror.nju.edu.cn/alpine" \
+    ); \
+    # Try each mirror until one works
+    for mirror in "${MIRRORS[@]}"; do \
+        echo "Trying mirror: $mirror"; \
+        echo "$mirror/v3.22/main" > /etc/apk/repositories && \
+        echo "$mirror/v3.22/community" >> /etc/apk/repositories && \
+        # Test the mirror with update
+        if apk update --no-cache 2>/dev/null; then \
+            echo "Successfully using mirror: $mirror"; \
+            # Install packages
+            if apk add --no-cache git ca-certificates; then \
+                echo "Packages installed successfully with mirror: $mirror"; \
+                break; \
+            else \
+                echo "Package installation failed with mirror: $mirror, trying next..."; \
+            fi \
+        else \
+            echo "Mirror $mirror failed, trying next..."; \
+        fi \
     done; \
-    # Install packages with retry mechanism
-    for i in 1 2 3; do \
-        apk add --no-cache git ca-certificates && break || { \
-            echo "Retry $i: apk install failed, retrying in 5s..."; \
-            sleep 5; \
-        } \
-    done
+    # Verify git is installed
+    git --version
 
 # Copy go mod files first for better layer caching
 COPY go.mod go.sum ./
 
-# Download dependencies with retry mechanism
+# Download dependencies with retry mechanism and Go proxy mirrors
 RUN set -eux; \
-    for i in 1 2 3; do \
-        go mod download && go mod verify && break || { \
-            echo "Retry $i: go mod download failed, retrying in 5s..."; \
-            sleep 5; \
+    # Define Go module proxies (including Chinese mirrors)
+    GO_PROXIES=( \
+        "https://proxy.golang.org,direct" \
+        "https://goproxy.cn,direct" \
+        "https://mirrors.aliyun.com/goproxy/,direct" \
+        "https://goproxy.io,direct" \
+    ); \
+    # Try each Go proxy until one works
+    for proxy in "${GO_PROXIES[@]}"; do \
+        echo "Trying Go proxy: $proxy"; \
+        export GOPROXY="$proxy"; \
+        export GOSUMDB="sum.golang.org"; \
+        if go mod download && go mod verify; then \
+            echo "Go modules downloaded successfully with proxy: $proxy"; \
+            break; \
+        else \
+            echo "Go proxy $proxy failed, trying next..."; \
             go clean -modcache; \
-        } \
+            sleep 3; \
+        fi \
     done
 
 # Copy source code
@@ -57,20 +86,35 @@ WORKDIR /app/ui
 # Copy package files
 COPY ui/package*.json ./
 
-# Install npm dependencies with retry mechanism
+# Install npm dependencies with retry mechanism and multiple registries
 RUN set -eux; \
+    # Define npm registries (including Chinese mirrors)
+    NPM_REGISTRIES=( \
+        "https://registry.npmjs.org/" \
+        "https://registry.npmmirror.com/" \
+        "https://mirrors.tuna.tsinghua.edu.cn/npm/" \
+        "https://mirrors.ustc.edu.cn/npm/" \
+        "https://registry.npm.taobao.org/" \
+    ); \
     # Configure npm for better reliability
     npm config set fetch-timeout 300000; \
     npm config set fetch-retry-mintimeout 20000; \
     npm config set fetch-retry-maxtimeout 120000; \
-    # Install with retries
-    for i in 1 2 3; do \
-        npm ci && break || { \
-            echo "Retry $i: npm ci failed, retrying in 10s..."; \
-            sleep 10; \
+    # Try each npm registry until one works
+    for registry in "${NPM_REGISTRIES[@]}"; do \
+        echo "Trying npm registry: $registry"; \
+        npm config set registry "$registry"; \
+        if npm ci --no-audit --no-fund; then \
+            echo "npm packages installed successfully with registry: $registry"; \
+            break; \
+        else \
+            echo "npm registry $registry failed, trying next..."; \
             npm cache clean --force; \
-        } \
-    done
+            sleep 5; \
+        fi \
+    done; \
+    # Verify node_modules exists
+    ls -la node_modules/ | head -5
 
 # Copy source code and build
 COPY ui/ ./
@@ -106,22 +150,38 @@ ENTRYPOINT ["/usr/local/bin/console"]
 # Alternative production stage with Alpine (if you need shell access for debugging)
 FROM alpine:latest AS production-debug
 
-# Install runtime dependencies with retry mechanism
+# Install runtime dependencies with retry mechanism and multiple mirrors
 RUN set -eux; \
-    # Update package index with retries
-    for i in 1 2 3; do \
-        apk update && break || { \
-            echo "Retry $i: apk update failed, retrying in 5s..."; \
-            sleep 5; \
-        } \
+    # Define Alpine mirrors (including Chinese mirrors for better connectivity)
+    MIRRORS=( \
+        "https://dl-cdn.alpinelinux.org/alpine" \
+        "https://mirrors.tuna.tsinghua.edu.cn/alpine" \
+        "https://mirrors.ustc.edu.cn/alpine" \
+        "https://mirrors.aliyun.com/alpine" \
+        "https://mirror.nju.edu.cn/alpine" \
+        "https://mirrors.huaweicloud.com/alpine" \
+    ); \
+    # Try each mirror until one works
+    for mirror in "${MIRRORS[@]}"; do \
+        echo "Trying mirror: $mirror"; \
+        echo "$mirror/latest-stable/main" > /etc/apk/repositories && \
+        echo "$mirror/latest-stable/community" >> /etc/apk/repositories && \
+        # Test the mirror with update
+        if apk update --no-cache 2>/dev/null; then \
+            echo "Successfully using mirror: $mirror"; \
+            # Install packages
+            if apk add --no-cache ca-certificates tzdata wget curl; then \
+                echo "Packages installed successfully with mirror: $mirror"; \
+                break; \
+            else \
+                echo "Package installation failed with mirror: $mirror, trying next..."; \
+            fi \
+        else \
+            echo "Mirror $mirror failed, trying next..."; \
+        fi \
     done; \
-    # Install packages with retry mechanism
-    for i in 1 2 3; do \
-        apk add --no-cache ca-certificates tzdata wget curl && break || { \
-            echo "Retry $i: apk install failed, retrying in 5s..."; \
-            sleep 5; \
-        } \
-    done
+    # Verify curl is installed
+    curl --version
 
 # Create non-root user
 RUN addgroup -g 1001 -S infracore && \

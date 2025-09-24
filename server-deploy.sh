@@ -395,6 +395,73 @@ update_repository() {
 EOF
 }
 
+# Build Docker images with mirror optimization
+build_with_mirrors() {
+    log_step "Building Docker images with optimized mirrors..."
+    
+    # Detect region for mirror selection
+    local region="auto"
+    
+    # Try to detect if we're in China by checking common Chinese domains
+    if ping -c 1 -W 2 baidu.com >/dev/null 2>&1 || ping -c 1 -W 2 qq.com >/dev/null 2>&1; then
+        region="cn"
+        log_info "Detected Chinese network environment, using Chinese mirrors"
+    else
+        log_info "Using global mirrors with fallback"
+    fi
+    
+    # Create temporary docker-compose override for build args
+    local compose_override="docker-compose.build-override.yml"
+    
+    case "$region" in
+        "cn")
+            log_info "Configuring build for Chinese mirrors..."
+            cat > "$compose_override" << 'EOF'
+version: '3.8'
+services:
+  infra-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - ALPINE_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
+        - GO_PROXY=https://goproxy.cn,direct
+        - NPM_REGISTRY=https://registry.npmmirror.com/
+      network_mode: host
+EOF
+            ;;
+        *)
+            log_info "Using global configuration with automatic fallback..."
+            cat > "$compose_override" << 'EOF'
+version: '3.8'
+services:
+  infra-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network_mode: host
+EOF
+            ;;
+    esac
+    
+    # Build with the appropriate configuration
+    log_info "Starting Docker build process..."
+    if docker-compose -f docker-compose.yml -f "$compose_override" build --no-cache; then
+        log_success "Docker images built successfully"
+    else
+        log_warning "Build failed with optimized mirrors, trying standard build..."
+        if docker-compose -f docker-compose.yml build --no-cache; then
+            log_success "Docker images built with standard configuration"
+        else
+            log_error "Docker build failed completely"
+            return 1
+        fi
+    fi
+    
+    # Cleanup temporary file
+    rm -f "$compose_override"
+}
+
 # Docker deployment
 deploy_docker() {
     log_step "Deploying with Docker..."
@@ -411,12 +478,12 @@ deploy_docker() {
     if [[ -n "$GITHUB_TOKEN" ]]; then
         log_info "Pulling latest image from registry..."
         docker pull "$REGISTRY/$IMAGE_NAME:latest" || {
-            log_warning "Failed to pull image, building locally..."
-            docker-compose -f docker-compose.yml build
+            log_warning "Failed to pull image, building locally with mirror optimization..."
+            build_with_mirrors
         }
     else
-        log_info "Building Docker images locally..."
-        docker-compose -f docker-compose.yml build
+        log_info "Building Docker images locally with mirror optimization..."
+        build_with_mirrors
     fi
     
     # Setup environment configuration
