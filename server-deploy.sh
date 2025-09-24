@@ -1286,7 +1286,7 @@ deploy_docker() {
     fi
     
     # Use latest image or build locally
-    if [[ -n "${GITHUB_TOKEN:-}" ]];
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         log_info "Pulling latest image from registry..."
         docker pull "$REGISTRY/$IMAGE_NAME:latest" || {
             log_warning "Failed to pull image, building locally with mirror optimization..."
