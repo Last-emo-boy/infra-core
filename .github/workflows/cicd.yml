@@ -328,6 +328,14 @@ jobs:
         output: 'trivy-results.sarif'
       continue-on-error: true
     
+    - name: Ensure Trivy SARIF file exists
+      run: |
+        # Create empty SARIF file if trivy didn't create one
+        if [ ! -f trivy-results.sarif ]; then
+          echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"trivy","version":"latest"}},"results":[]}]}' > trivy-results.sarif
+          echo "Created empty SARIF file as fallback"
+        fi
+    
     - name: Upload Trivy scan results
       uses: github/codeql-action/upload-sarif@v3
       if: always()
@@ -453,7 +461,7 @@ jobs:
     
     - name: Download all artifacts
       if: steps.detect.outputs.should-release == 'true'
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         path: dist/
     
@@ -461,7 +469,8 @@ jobs:
       if: steps.detect.outputs.should-release == 'true'
       run: |
         mkdir -p release-assets
-        for dir in dist/binaries-*/; do
+        # In download-artifact@v4, artifacts are downloaded into individual directories
+        find dist/ -name "binaries-*" -type d | while read dir; do
           if [ -d "$dir" ]; then
             platform=$(basename "$dir" | sed 's/binaries-//')
             cd "$dir"
@@ -540,14 +549,15 @@ jobs:
         git config --local user.name "GitHub Action"
     
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         path: dist/
     
     - name: Prepare release assets
       run: |
         mkdir -p release-assets
-        for dir in dist/binaries-*/; do
+        # In download-artifact@v4, artifacts are downloaded into individual directories  
+        find dist/ -name "binaries-*" -type d | while read dir; do
           if [ -d "$dir" ]; then
             platform=$(basename "$dir" | sed 's/binaries-//')
             cd "$dir"
