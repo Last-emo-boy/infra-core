@@ -1,0 +1,81 @@
+# Git
+.git
+.gitignore
+.gitattributes
+.github
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+log/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Dependency directories
+node_modules/
+bin/
+dist/
+
+# Build outputs (will be copied explicitly)
+ui/dist/
+ui/node_modules/
+
+# Test files
+*_test.go
+test/
+tests/
+coverage.out
+*.test
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+*.sublime-project
+*.sublime-workspace
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Backup files
+*.backup
+*.bak
+backups/
+
+# Docker files (except Dockerfile itself)
+docker-compose*.yml
+.dockerignore
+
+# Build artifacts that shouldn't be in context
+*.tar.gz
+*.zip
+deployment/

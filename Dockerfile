@@ -3,23 +3,48 @@ FROM golang:1.24.5-alpine AS go-builder
 
 WORKDIR /app
 
-# Install dependencies for building 
-RUN apk add --no-cache git ca-certificates
+# Install dependencies for building with retry mechanism and multiple mirrors
+RUN set -eux; \
+    # Update package index with retries
+    for i in 1 2 3; do \
+        apk update && break || { \
+            echo "Retry $i: apk update failed, retrying in 5s..."; \
+            sleep 5; \
+        } \
+    done; \
+    # Install packages with retry mechanism
+    for i in 1 2 3; do \
+        apk add --no-cache git ca-certificates && break || { \
+            echo "Retry $i: apk install failed, retrying in 5s..."; \
+            sleep 5; \
+        } \
+    done
 
 # Copy go mod files first for better layer caching
 COPY go.mod go.sum ./
-RUN go mod download && go mod verify
+
+# Download dependencies with retry mechanism
+RUN set -eux; \
+    for i in 1 2 3; do \
+        go mod download && go mod verify && break || { \
+            echo "Retry $i: go mod download failed, retrying in 5s..."; \
+            sleep 5; \
+            go clean -modcache; \
+        } \
+    done
 
 # Copy source code
 COPY . .
 
 # Build applications (CGO disabled for pure Go builds, fully static binaries)
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+RUN set -eux; \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -a -installsuffix cgo \
     -ldflags='-w -s -extldflags "-static"' \
     -o bin/gate cmd/gate/main.go
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+RUN set -eux; \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -a -installsuffix cgo \
     -ldflags='-w -s -extldflags "-static"' \
     -o bin/console cmd/console/main.go
@@ -31,7 +56,21 @@ WORKDIR /app/ui
 
 # Copy package files
 COPY ui/package*.json ./
-RUN npm ci
+
+# Install npm dependencies with retry mechanism
+RUN set -eux; \
+    # Configure npm for better reliability
+    npm config set fetch-timeout 300000; \
+    npm config set fetch-retry-mintimeout 20000; \
+    npm config set fetch-retry-maxtimeout 120000; \
+    # Install with retries
+    for i in 1 2 3; do \
+        npm ci && break || { \
+            echo "Retry $i: npm ci failed, retrying in 10s..."; \
+            sleep 10; \
+            npm cache clean --force; \
+        } \
+    done
 
 # Copy source code and build
 COPY ui/ ./
@@ -67,8 +106,22 @@ ENTRYPOINT ["/usr/local/bin/console"]
 # Alternative production stage with Alpine (if you need shell access for debugging)
 FROM alpine:latest AS production-debug
 
-# Install runtime dependencies
-RUN apk add --no-cache ca-certificates tzdata wget
+# Install runtime dependencies with retry mechanism
+RUN set -eux; \
+    # Update package index with retries
+    for i in 1 2 3; do \
+        apk update && break || { \
+            echo "Retry $i: apk update failed, retrying in 5s..."; \
+            sleep 5; \
+        } \
+    done; \
+    # Install packages with retry mechanism
+    for i in 1 2 3; do \
+        apk add --no-cache ca-certificates tzdata wget curl && break || { \
+            echo "Retry $i: apk install failed, retrying in 5s..."; \
+            sleep 5; \
+        } \
+    done
 
 # Create non-root user
 RUN addgroup -g 1001 -S infracore && \
