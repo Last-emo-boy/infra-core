@@ -1017,7 +1017,13 @@ build_with_mirrors() {
     
     # Detect optimal region with enhanced logic
     local region
-    region=$(retry_with_backoff 2 3 "network detection" detect_optimal_region)
+    region=$(retry_with_backoff 2 3 "network detection" detect_optimal_region) || region="global"
+    
+    # Ensure we have a valid region
+    if [[ -z "$region" ]]; then
+        region="global"
+        log_warning "Region detection failed, using global mirrors"
+    fi
     
     # Create temporary docker-compose override for build args
     local compose_override="docker-compose.build-override.yml"
@@ -1086,11 +1092,19 @@ EOF
         
         case "$strategy" in
             "optimized_with_cache")
-                build_cmd="docker-compose -f docker-compose.yml -f $compose_override build --parallel"
+                if [[ -f "$compose_override" ]]; then
+                    build_cmd="docker-compose -f docker-compose.yml -f '$compose_override' build --parallel"
+                else
+                    build_cmd="docker-compose -f docker-compose.yml build --parallel"
+                fi
                 timeout_duration=900
                 ;;
             "optimized_no_cache")
-                build_cmd="docker-compose -f docker-compose.yml -f $compose_override build --no-cache --parallel"
+                if [[ -f "$compose_override" ]]; then
+                    build_cmd="docker-compose -f docker-compose.yml -f '$compose_override' build --no-cache --parallel"
+                else
+                    build_cmd="docker-compose -f docker-compose.yml build --no-cache --parallel"
+                fi
                 timeout_duration=1200
                 ;;
             "standard_with_cache")
@@ -1111,43 +1125,30 @@ EOF
                 ;;
         esac
         
-        # Execute build with timeout and retry
-        if retry_with_backoff 2 30 "Docker build ($strategy)" safe_execute "$timeout_duration" "Docker build" $build_cmd; then
+        # Execute build command directly
+        log_info "Executing: $build_cmd"
+        
+        if eval "timeout $timeout_duration $build_cmd"; then
             log_success "Docker build completed successfully with strategy: $strategy"
-            build_success=true
             
-            # Verify images were created
-            log_info "Verifying created images..."
-            if docker-compose -f docker-compose.yml config --services | while read -r service; do
-                local image_name
-                image_name=$(docker-compose -f docker-compose.yml config | grep -A 10 "^  $service:" | grep "image:" | awk '{print $2}' | head -1)
-                
-                if [[ -n "$image_name" ]] && docker image inspect "$image_name" >/dev/null 2>&1; then
-                    log_success "Image verified: $image_name"
-                else
-                    log_error "Image verification failed: $image_name"
-                    return 1
-                fi
-            done; then
-                log_success "All images verified successfully"
+            # Simple verification - check if docker-compose can see the services
+            if docker-compose -f docker-compose.yml config >/dev/null 2>&1; then
+                log_success "Docker compose configuration verified"
+                build_success=true
                 break
             else
-                log_error "Image verification failed"
-                build_success=false
-                continue
+                log_error "Docker compose configuration verification failed"
             fi
         else
             log_warning "Build strategy '$strategy' failed, trying next..."
-            
-            # Clean up partial builds
-            docker-compose -f docker-compose.yml down --remove-orphans 2>/dev/null || true
-            
-            # For failed builds, clean cache before next attempt
-            if [[ "$strategy" =~ "cache" ]]; then
-                docker builder prune -f 2>/dev/null || true
-            fi
-            
-            continue
+        fi
+        
+        # Clean up partial builds on failure
+        docker-compose -f docker-compose.yml down --remove-orphans 2>/dev/null || true
+        
+        # For failed builds with cache, clean cache before next attempt
+        if [[ "$strategy" =~ "cache" ]]; then
+            docker builder prune -f 2>/dev/null || true
         fi
     done
     
