@@ -427,7 +427,7 @@ services:
         - ALPINE_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
         - GO_PROXY=https://goproxy.cn,direct
         - NPM_REGISTRY=https://registry.npmmirror.com/
-      network_mode: host
+    network_mode: host
 EOF
             ;;
         *)
@@ -439,7 +439,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      network_mode: host
+    network_mode: host
 EOF
             ;;
     esac

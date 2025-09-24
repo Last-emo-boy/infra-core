@@ -5,16 +5,13 @@ WORKDIR /app
 
 # Install dependencies for building with retry mechanism and multiple mirrors
 RUN set -eux; \
-    # Define Alpine mirrors (including Chinese mirrors for better connectivity)
-    MIRRORS=( \
+    # Try Alpine mirrors one by one (sh-compatible syntax)
+    for mirror in \
         "https://dl-cdn.alpinelinux.org/alpine" \
         "https://mirrors.tuna.tsinghua.edu.cn/alpine" \
         "https://mirrors.ustc.edu.cn/alpine" \
         "https://mirrors.aliyun.com/alpine" \
-        "https://mirror.nju.edu.cn/alpine" \
-    ); \
-    # Try each mirror until one works
-    for mirror in "${MIRRORS[@]}"; do \
+        "https://mirror.nju.edu.cn/alpine"; do \
         echo "Trying mirror: $mirror"; \
         echo "$mirror/v3.22/main" > /etc/apk/repositories && \
         echo "$mirror/v3.22/community" >> /etc/apk/repositories && \
@@ -27,10 +24,10 @@ RUN set -eux; \
                 break; \
             else \
                 echo "Package installation failed with mirror: $mirror, trying next..."; \
-            fi \
+            fi; \
         else \
             echo "Mirror $mirror failed, trying next..."; \
-        fi \
+        fi; \
     done; \
     # Verify git is installed
     git --version
@@ -40,15 +37,12 @@ COPY go.mod go.sum ./
 
 # Download dependencies with retry mechanism and Go proxy mirrors
 RUN set -eux; \
-    # Define Go module proxies (including Chinese mirrors)
-    GO_PROXIES=( \
+    # Try Go module proxies one by one (sh-compatible syntax)
+    for proxy in \
         "https://proxy.golang.org,direct" \
         "https://goproxy.cn,direct" \
         "https://mirrors.aliyun.com/goproxy/,direct" \
-        "https://goproxy.io,direct" \
-    ); \
-    # Try each Go proxy until one works
-    for proxy in "${GO_PROXIES[@]}"; do \
+        "https://goproxy.io,direct"; do \
         echo "Trying Go proxy: $proxy"; \
         export GOPROXY="$proxy"; \
         export GOSUMDB="sum.golang.org"; \
@@ -59,7 +53,7 @@ RUN set -eux; \
             echo "Go proxy $proxy failed, trying next..."; \
             go clean -modcache; \
             sleep 3; \
-        fi \
+        fi; \
     done
 
 # Copy source code
@@ -88,20 +82,17 @@ COPY ui/package*.json ./
 
 # Install npm dependencies with retry mechanism and multiple registries
 RUN set -eux; \
-    # Define npm registries (including Chinese mirrors)
-    NPM_REGISTRIES=( \
-        "https://registry.npmjs.org/" \
-        "https://registry.npmmirror.com/" \
-        "https://mirrors.tuna.tsinghua.edu.cn/npm/" \
-        "https://mirrors.ustc.edu.cn/npm/" \
-        "https://registry.npm.taobao.org/" \
-    ); \
     # Configure npm for better reliability
     npm config set fetch-timeout 300000; \
     npm config set fetch-retry-mintimeout 20000; \
     npm config set fetch-retry-maxtimeout 120000; \
-    # Try each npm registry until one works
-    for registry in "${NPM_REGISTRIES[@]}"; do \
+    # Try npm registries one by one (sh-compatible syntax)
+    for registry in \
+        "https://registry.npmjs.org/" \
+        "https://registry.npmmirror.com/" \
+        "https://mirrors.tuna.tsinghua.edu.cn/npm/" \
+        "https://mirrors.ustc.edu.cn/npm/" \
+        "https://registry.npm.taobao.org/"; do \
         echo "Trying npm registry: $registry"; \
         npm config set registry "$registry"; \
         if npm ci --no-audit --no-fund; then \
@@ -111,7 +102,7 @@ RUN set -eux; \
             echo "npm registry $registry failed, trying next..."; \
             npm cache clean --force; \
             sleep 5; \
-        fi \
+        fi; \
     done; \
     # Verify node_modules exists
     ls -la node_modules/ | head -5
@@ -152,17 +143,14 @@ FROM alpine:latest AS production-debug
 
 # Install runtime dependencies with retry mechanism and multiple mirrors
 RUN set -eux; \
-    # Define Alpine mirrors (including Chinese mirrors for better connectivity)
-    MIRRORS=( \
+    # Try Alpine mirrors one by one (sh-compatible syntax)
+    for mirror in \
         "https://dl-cdn.alpinelinux.org/alpine" \
         "https://mirrors.tuna.tsinghua.edu.cn/alpine" \
         "https://mirrors.ustc.edu.cn/alpine" \
         "https://mirrors.aliyun.com/alpine" \
         "https://mirror.nju.edu.cn/alpine" \
-        "https://mirrors.huaweicloud.com/alpine" \
-    ); \
-    # Try each mirror until one works
-    for mirror in "${MIRRORS[@]}"; do \
+        "https://mirrors.huaweicloud.com/alpine"; do \
         echo "Trying mirror: $mirror"; \
         echo "$mirror/latest-stable/main" > /etc/apk/repositories && \
         echo "$mirror/latest-stable/community" >> /etc/apk/repositories && \
@@ -175,10 +163,10 @@ RUN set -eux; \
                 break; \
             else \
                 echo "Package installation failed with mirror: $mirror, trying next..."; \
-            fi \
+            fi; \
         else \
             echo "Mirror $mirror failed, trying next..."; \
-        fi \
+        fi; \
     done; \
     # Verify curl is installed
     curl --version
