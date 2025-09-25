@@ -29,6 +29,10 @@ GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 GITHUB_ACTOR="${GITHUB_ACTOR:-}"
 BACKUP_RETENTION="${BACKUP_RETENTION:-10}"
 
+# Mirror configuration
+USE_MIRRORS="${USE_MIRRORS:-false}"
+MIRROR_REGION="${MIRROR_REGION:-auto}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -317,6 +321,9 @@ Options:
     --docker                Use Docker deployment (default)
     --binary                Use binary deployment
     --backup                Create backup before deployment
+    --mirror [REGION]       Use mirror sources for faster builds
+                           REGION: cn (China), us (US), eu (Europe), auto (detect)
+                           If no region specified, uses auto-detection
     --rollback              Rollback to previous deployment
     --status                Show deployment status
     --logs                  Show service logs
@@ -326,9 +333,11 @@ Options:
     --update                Update to latest version without full deployment
 
 Examples:
-    $0                                    # Deploy latest main branch
+    $0                                    # Deploy latest main branch (no mirrors)
+    $0 --mirror cn                        # Deploy with Chinese mirrors
+    $0 --mirror                           # Deploy with auto-detected mirrors
     $0 --branch develop --env staging     # Deploy develop branch to staging
-    $0 --backup                          # Deploy with backup
+    $0 --backup --mirror cn               # Deploy with backup and Chinese mirrors
     $0 --status                          # Show current status
     $0 --logs                            # Show service logs
     $0 --update                          # Quick update to latest version
@@ -375,6 +384,16 @@ parse_args() {
             --backup)
                 CREATE_BACKUP=true
                 shift
+                ;;
+            --mirror)
+                USE_MIRRORS=true
+                if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+                    MIRROR_REGION="$2"
+                    shift 2
+                else
+                    MIRROR_REGION="auto"
+                    shift
+                fi
                 ;;
             --rollback)
                 ACTION="rollback"
@@ -965,8 +984,14 @@ update_repository() {
 EOF
 }
 
-# Advanced network environment detection
+# Advanced network environment detection (only when mirrors are enabled)
 detect_optimal_region() {
+    # If mirrors are not enabled, always return global
+    if [[ "$USE_MIRRORS" != "true" ]]; then
+        echo "global"
+        return
+    fi
+    
     local china_sites=("baidu.com" "qq.com" "taobao.com" "163.com")
     local global_sites=("google.com" "github.com" "cloudflare.com")
     local china_score=0
@@ -1011,22 +1036,28 @@ detect_optimal_region() {
     fi
 }
 
-# Build Docker images with intelligent mirror optimization  
+# Build Docker images with optional mirror optimization  
 build_with_mirrors() {
-    log_step "Building Docker images with optimized mirrors..."
-    
-    # Detect optimal region with enhanced logic
-    local region
-    region=$(retry_with_backoff 2 3 "network detection" detect_optimal_region) || region="global"
-    
-    # Ensure we have a valid region
-    if [[ -z "$region" ]]; then
-        region="global"
-        log_warning "Region detection failed, using global mirrors"
-    fi
-    
-    # Create temporary docker-compose override for build args
-    local compose_override="docker-compose.build-override.yml"
+    if [[ "$USE_MIRRORS" == "true" ]]; then
+        log_step "Building Docker images with mirror optimization..."
+        
+        # Detect optimal region with enhanced logic
+        local region
+        if [[ "$MIRROR_REGION" != "auto" ]]; then
+            region="$MIRROR_REGION"
+            log_info "Using user-specified mirror region: $region"
+        else
+            region=$(retry_with_backoff 2 3 "network detection" detect_optimal_region) || region="global"
+            
+            # Ensure we have a valid region
+            if [[ -z "$region" ]]; then
+                region="global"
+                log_warning "Region detection failed, using global mirrors"
+            fi
+        fi
+        
+        # Create temporary docker-compose override for build args
+        local compose_override="docker-compose.build-override.yml"
     
     case "$region" in
         "cn")
@@ -1180,8 +1211,20 @@ EOF
         fi
     done
     
-    # Cleanup temporary file
-    rm -f "$compose_override"
+        # Cleanup temporary file
+        rm -f "$compose_override"
+    else
+        log_step "Building Docker images with standard configuration..."
+        log_info "Mirror optimization disabled. Use --mirror to enable faster builds."
+        
+        # Build with standard Docker Compose
+        if timeout "$DOCKER_TIMEOUT" docker-compose -f docker-compose.yml build; then
+            log_success "Docker images built successfully with standard configuration"
+        else
+            log_error "Docker build failed with standard configuration"
+            return 1
+        fi
+    fi
 }
 
 # Comprehensive deployment health verification
