@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 
 
+### [0.1.1-beta.2](https://github.com/Last-emo-boy/infra-core/compare/v0.1.1-beta.1...v0.1.1-beta.2) (2025-09-25)
+
+
+### Features
+
+* integrate multiple mirror sources for reliable Docker builds ([8efd614](https://github.com/Last-emo-boy/infra-core/commit/8efd614896b38694d45966955682efaaa020d158))
+
+
+### Bug Fixes
+
+* improve Docker build reliability and Alpine package installation ([08048a1](https://github.com/Last-emo-boy/infra-core/commit/08048a1ce0e4d56403292b1999ab204ecd1cf333))
+* resolve Docker build and compose configuration issues ([89340d0](https://github.com/Last-emo-boy/infra-core/commit/89340d04ea519789d3629607d20b74a14474e60b))
+
 ### [0.1.1-beta.1](https://github.com/Last-emo-boy/infra-core/compare/v0.1.1-beta.0...v0.1.1-beta.1) (2025-09-24)
 
 
