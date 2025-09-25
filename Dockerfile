@@ -162,8 +162,12 @@ COPY --from=go-builder /app/bin/console /usr/local/bin/console
 # Copy frontend build
 COPY --from=node-builder /app/ui/dist /app/ui/dist
 
-# Copy configuration files
+# Copy configuration files to both locations for compatibility
 COPY configs/ /etc/infra-core/configs/
+COPY configs/ /app/configs/
+
+# Set working directory
+WORKDIR /app
 
 # Set environment variables
 ENV INFRA_CORE_ENV=production
@@ -268,8 +272,12 @@ RUN mkdir -p /var/lib/infra-core \
 COPY --from=go-builder /app/bin/* /usr/local/bin/
 COPY --from=node-builder /app/ui/dist /app/ui/dist
 
-# Copy configuration files
+# Copy configuration files to both locations
 COPY configs/ /etc/infra-core/configs/
+COPY configs/ /app/configs/
+
+# Set working directory
+WORKDIR /app
 
 # Set ownership
 RUN chown -R infracore:infracore /app

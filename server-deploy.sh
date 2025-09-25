@@ -33,6 +33,19 @@ BACKUP_RETENTION="${BACKUP_RETENTION:-10}"
 USE_MIRRORS="${USE_MIRRORS:-false}"
 MIRROR_REGION="${MIRROR_REGION:-auto}"
 
+# Configuration settings with defaults
+NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
+CUSTOM_DOMAIN="${CUSTOM_DOMAIN:-}"
+CUSTOM_EMAIL="${CUSTOM_EMAIL:-}"
+CUSTOM_HTTP_PORT="${CUSTOM_HTTP_PORT:-}"
+CUSTOM_HTTPS_PORT="${CUSTOM_HTTPS_PORT:-}"
+CUSTOM_API_PORT="${CUSTOM_API_PORT:-}"
+CUSTOM_SSL_ENABLED="${CUSTOM_SSL_ENABLED:-}"
+CUSTOM_MEMORY_LIMIT="${CUSTOM_MEMORY_LIMIT:-}"
+CUSTOM_CPU_LIMIT="${CUSTOM_CPU_LIMIT:-}"
+CUSTOM_BACKUP_ENABLED="${CUSTOM_BACKUP_ENABLED:-}"
+CUSTOM_BACKUP_RETENTION="${CUSTOM_BACKUP_RETENTION:-}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -421,6 +434,8 @@ Options:
     --stop                  Stop services
     --start                 Start services
     --update                Update to latest version without full deployment
+    --non-interactive       Run in non-interactive mode with default values
+    --configure             Run interactive configuration setup only
     --upgrade               Interactive upgrade with confirmation prompt
     --uninstall             Completely uninstall InfraCore and cleanup all components
 
@@ -439,6 +454,28 @@ Examples:
     $0 --troubleshoot                    # Run diagnostics
     $0 --update                          # Quick update to latest version
     $0 --uninstall                       # Completely remove InfraCore
+    $0 --configure                       # Configure settings only
+    NON_INTERACTIVE=true $0 --mirror     # Deploy without prompts
+
+Environment Variables:
+    JWT_SECRET             JWT secret key (auto-generated if not set)
+    ACME_EMAIL             Email for SSL certificate registration
+    NON_INTERACTIVE        Skip interactive prompts (true/false)
+    CUSTOM_DOMAIN          Custom domain name for the service
+    CUSTOM_EMAIL           Custom admin email address
+    CUSTOM_HTTP_PORT       Custom HTTP port (default: 80)
+    CUSTOM_HTTPS_PORT      Custom HTTPS port (default: 443)
+    CUSTOM_API_PORT        Custom API port (default: 8082)
+
+Configuration:
+    The script supports interactive configuration where you can customize:
+    • Domain name and admin email for SSL certificates
+    • Service ports (HTTP, HTTPS, API)
+    • Resource limits (memory, CPU)
+    • Backup settings
+    
+    Use --configure to set up configuration, or set NON_INTERACTIVE=true
+    to use defaults automatically.
 
 EOF
 }
@@ -543,6 +580,14 @@ parse_args() {
                 ;;
             --uninstall)
                 ACTION="uninstall"
+                shift
+                ;;
+            --non-interactive)
+                NON_INTERACTIVE=true
+                shift
+                ;;
+            --configure)
+                ACTION="configure"
                 shift
                 ;;
             *)
@@ -1815,9 +1860,246 @@ deploy_binary() {
     wait_for_services
 }
 
+# Interactive configuration setup
+setup_interactive_config() {
+    log_step "🔧 Interactive Configuration Setup"
+    
+    local config_changed=false
+    
+    # Check if running in non-interactive mode
+    if [[ "$NON_INTERACTIVE" == "true" ]]; then
+        log_info "Non-interactive mode: using default values"
+        setup_default_config
+        return
+    fi
+    
+    log_info "We'll now configure essential settings for your InfraCore deployment."
+    log_info "Press Enter to use default values shown in [brackets]."
+    echo
+    
+    # 1. Domain configuration
+    log_info "🌐 Domain and Email Configuration"
+    local current_domain=$(grep -o "console\.[^\"]*" "$DEPLOY_DIR/current/configs/production.yaml" 2>/dev/null | head -1 || echo "your-domain.com")
+    local current_email=$(grep -o "admin@[^\"]*" "$DEPLOY_DIR/current/configs/production.yaml" 2>/dev/null | head -1 || echo "admin@your-domain.com")
+    
+    read -p "🔗 Enter your domain name [$current_domain]: " domain_input
+    CUSTOM_DOMAIN="${domain_input:-$current_domain}"
+    
+    read -p "📧 Enter admin email for SSL certificates [$current_email]: " email_input
+    CUSTOM_EMAIL="${email_input:-$current_email}"
+    
+    # 2. Security configuration
+    echo
+    log_info "🔐 Security Configuration"
+    
+    if [[ -z "$JWT_SECRET" ]]; then
+        log_warning "JWT secret not set. Generating a secure random secret..."
+        JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p)
+        log_success "JWT secret generated automatically"
+    else
+        log_info "Using existing JWT secret"
+    fi
+    
+    # 3. Service ports configuration
+    echo
+    log_info "🚪 Service Ports Configuration"
+    local current_http_port=$(grep -A2 "ports:" "$DEPLOY_DIR/current/configs/production.yaml" | grep "http:" | awk '{print $2}' || echo "80")
+    local current_https_port=$(grep -A3 "ports:" "$DEPLOY_DIR/current/configs/production.yaml" | grep "https:" | awk '{print $2}' || echo "443")
+    local current_api_port=$(grep "port:" "$DEPLOY_DIR/current/configs/production.yaml" | awk '{print $2}' || echo "8082")
+    
+    read -p "🌐 HTTP port [$current_http_port]: " http_port_input
+    CUSTOM_HTTP_PORT="${http_port_input:-$current_http_port}"
+    
+    read -p "🔒 HTTPS port [$current_https_port]: " https_port_input
+    CUSTOM_HTTPS_PORT="${https_port_input:-$current_https_port}"
+    
+    read -p "🔌 API port [$current_api_port]: " api_port_input
+    CUSTOM_API_PORT="${api_port_input:-$current_api_port}"
+    
+    # 4. SSL/TLS configuration
+    echo
+    log_info "🔒 SSL/TLS Configuration"
+    local ssl_enabled="true"
+    read -p "Enable automatic SSL certificates with Let's Encrypt? [Y/n]: " ssl_input
+    if [[ "$ssl_input" =~ ^[Nn]$ ]]; then
+        ssl_enabled="false"
+        log_warning "SSL disabled. You'll need to configure certificates manually."
+    fi
+    CUSTOM_SSL_ENABLED="$ssl_enabled"
+    
+    # 5. Resource limits
+    echo
+    log_info "📊 Resource Configuration"
+    read -p "🧠 Maximum memory usage (GB) [2]: " memory_input
+    CUSTOM_MEMORY_LIMIT="${memory_input:-2}g"
+    
+    read -p "⚡ CPU cores limit [2]: " cpu_input
+    CUSTOM_CPU_LIMIT="${cpu_input:-2}"
+    
+    # 6. Backup configuration
+    echo
+    log_info "💾 Backup Configuration"
+    read -p "🔄 Enable automatic backups? [Y/n]: " backup_input
+    CUSTOM_BACKUP_ENABLED="true"
+    if [[ "$backup_input" =~ ^[Nn]$ ]]; then
+        CUSTOM_BACKUP_ENABLED="false"
+    fi
+    
+    if [[ "$CUSTOM_BACKUP_ENABLED" == "true" ]]; then
+        read -p "📅 Backup retention days [30]: " retention_input
+        CUSTOM_BACKUP_RETENTION="${retention_input:-30}"
+    fi
+    
+    # Summary
+    echo
+    log_success "🎯 Configuration Summary:"
+    log_info "  Domain: $CUSTOM_DOMAIN"
+    log_info "  Admin Email: $CUSTOM_EMAIL"
+    log_info "  HTTP Port: $CUSTOM_HTTP_PORT"
+    log_info "  HTTPS Port: $CUSTOM_HTTPS_PORT"
+    log_info "  API Port: $CUSTOM_API_PORT"
+    log_info "  SSL Enabled: $CUSTOM_SSL_ENABLED"
+    log_info "  Memory Limit: $CUSTOM_MEMORY_LIMIT"
+    log_info "  CPU Limit: $CUSTOM_CPU_LIMIT"
+    log_info "  Backup Enabled: $CUSTOM_BACKUP_ENABLED"
+    [[ "$CUSTOM_BACKUP_ENABLED" == "true" ]] && log_info "  Backup Retention: $CUSTOM_BACKUP_RETENTION days"
+    
+    echo
+    read -p "✅ Proceed with this configuration? [Y/n]: " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        log_info "Configuration cancelled. Re-run with different values."
+        exit 0
+    fi
+    
+    config_changed=true
+    apply_custom_config
+}
+
+# Apply custom configuration
+apply_custom_config() {
+    log_info "📝 Applying custom configuration..."
+    
+    # Create custom production config
+    local config_file="$DEPLOY_DIR/current/configs/production.yaml"
+    local backup_config="$config_file.backup-$(date +%Y%m%d-%H%M%S)"
+    
+    if [[ -f "$config_file" ]]; then
+        cp "$config_file" "$backup_config"
+        log_info "Original config backed up to: $backup_config"
+    fi
+    
+    # Generate production configuration with custom values
+    cat > "$config_file" << EOF
+# Production Environment Configuration - Generated $(date)
+gate:
+  host: "0.0.0.0"
+  ports:
+    http: $CUSTOM_HTTP_PORT
+    https: $CUSTOM_HTTPS_PORT
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/gate.log"
+  acme:
+    directory_url: "https://acme-v02.api.letsencrypt.org/directory"
+    email: "$CUSTOM_EMAIL"
+    cache_dir: "/etc/infra-core/certs"
+    challenge_type: "http-01"
+    enabled: $CUSTOM_SSL_ENABLED
+  resources:
+    memory_limit: "$CUSTOM_MEMORY_LIMIT"
+    cpu_limit: "$CUSTOM_CPU_LIMIT"
+
+console:
+  host: "0.0.0.0"
+  port: $CUSTOM_API_PORT
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/console.log"
+  database:
+    path: "/var/lib/infra-core/console.db"
+    wal_mode: true
+    timeout: "30s"
+  auth:
+    jwt:
+      secret: ""  # Set via environment variable
+      expires_hours: 8
+    session:
+      timeout_minutes: 30
+  cors:
+    enabled: true
+    origins: ["https://$CUSTOM_DOMAIN", "http://localhost:3000"]
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    headers: ["Content-Type", "Authorization"]
+  backup:
+    enabled: $CUSTOM_BACKUP_ENABLED
+    retention_days: ${CUSTOM_BACKUP_RETENTION:-30}
+    path: "/var/lib/infra-core/backups"
+EOF
+    
+    # Update docker-compose with custom ports
+    update_docker_compose_ports
+    
+    log_success "Custom configuration applied successfully"
+}
+
+# Setup default configuration for non-interactive mode
+setup_default_config() {
+    log_info "🔧 Setting up default configuration..."
+    
+    # Set default values
+    CUSTOM_DOMAIN="${CUSTOM_DOMAIN:-console.example.com}"
+    CUSTOM_EMAIL="${CUSTOM_EMAIL:-admin@example.com}"
+    CUSTOM_HTTP_PORT="${CUSTOM_HTTP_PORT:-80}"
+    CUSTOM_HTTPS_PORT="${CUSTOM_HTTPS_PORT:-443}"
+    CUSTOM_API_PORT="${CUSTOM_API_PORT:-8082}"
+    CUSTOM_SSL_ENABLED="${CUSTOM_SSL_ENABLED:-true}"
+    CUSTOM_MEMORY_LIMIT="${CUSTOM_MEMORY_LIMIT:-2g}"
+    CUSTOM_CPU_LIMIT="${CUSTOM_CPU_LIMIT:-2}"
+    CUSTOM_BACKUP_ENABLED="${CUSTOM_BACKUP_ENABLED:-true}"
+    CUSTOM_BACKUP_RETENTION="${CUSTOM_BACKUP_RETENTION:-30}"
+    
+    # Generate JWT secret if not provided
+    if [[ -z "$JWT_SECRET" ]]; then
+        JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p)
+        log_info "Generated JWT secret automatically"
+    fi
+    
+    log_info "Using default configuration values"
+    apply_custom_config
+}
+
+# Update docker-compose ports
+update_docker_compose_ports() {
+    local compose_file="$DEPLOY_DIR/current/docker-compose.yml"
+    local backup_compose="$compose_file.backup-$(date +%Y%m%d-%H%M%S)"
+    
+    if [[ -f "$compose_file" ]]; then
+        cp "$compose_file" "$backup_compose"
+        
+        # Update ports in docker-compose.yml
+        sed -i "s/\"80:80\"/\"$CUSTOM_HTTP_PORT:80\"/g" "$compose_file"
+        sed -i "s/\"443:443\"/\"$CUSTOM_HTTPS_PORT:443\"/g" "$compose_file"
+        sed -i "s/\"8082:8082\"/\"$CUSTOM_API_PORT:8082\"/g" "$compose_file"
+        
+        # Add resource limits
+        if ! grep -q "deploy:" "$compose_file"; then
+            sed -i '/container_name: infra-core/a\    deploy:\n      resources:\n        limits:\n          memory: '${CUSTOM_MEMORY_LIMIT}'\n          cpus: "'${CUSTOM_CPU_LIMIT}'"' "$compose_file"
+        fi
+        
+        log_info "Docker Compose configuration updated"
+    fi
+}
+
 # Setup environment configuration
 setup_environment_config() {
     log_step "Setting up environment configuration..."
+    
+    # Run interactive config if not already done
+    if [[ -z "$CUSTOM_DOMAIN" ]]; then
+        setup_interactive_config
+    fi
     
     local config_source="$DEPLOY_DIR/current/configs/$ENVIRONMENT.yaml"
     local config_target="/etc/infra-core/config.yaml"
@@ -1832,16 +2114,53 @@ setup_environment_config() {
         exit 1
     fi
     
-    # Set environment variables
+    # Set environment variables with custom values
     cat > "/etc/infra-core/environment" << EOF
 INFRA_CORE_ENV=$ENVIRONMENT
 INFRA_CORE_CONFIG_PATH=/etc/infra-core/config.yaml
 INFRA_CORE_DATA_DIR=/var/lib/infra-core
 INFRA_CORE_LOG_DIR=/var/log/infra-core
+INFRA_CORE_JWT_SECRET=$JWT_SECRET
+INFRA_CORE_ACME_EMAIL=$CUSTOM_EMAIL
+EOF
+    
+    # Create .env file for Docker Compose
+    cat > "$DEPLOY_DIR/current/.env" << EOF
+JWT_SECRET=$JWT_SECRET
+ACME_EMAIL=$CUSTOM_EMAIL
+INFRA_CORE_ENV=$ENVIRONMENT
+CUSTOM_DOMAIN=$CUSTOM_DOMAIN
+CUSTOM_HTTP_PORT=$CUSTOM_HTTP_PORT
+CUSTOM_HTTPS_PORT=$CUSTOM_HTTPS_PORT
+CUSTOM_API_PORT=$CUSTOM_API_PORT
 EOF
     
     chown "$SERVICE_USER:$SERVICE_USER" "/etc/infra-core/environment"
     chmod 600 "/etc/infra-core/environment"
+    
+    chown "$SERVICE_USER:$SERVICE_USER" "$DEPLOY_DIR/current/.env"
+    chmod 600 "$DEPLOY_DIR/current/.env"
+    
+    log_success "Environment configuration completed"
+    
+    # Show configuration summary
+    show_config_summary
+}
+
+# Show configuration summary
+show_config_summary() {
+    log_info "📋 Current Configuration:"
+    echo "  🌐 Domain: ${CUSTOM_DOMAIN:-'Not set'}"
+    echo "  📧 Admin Email: ${CUSTOM_EMAIL:-'Not set'}" 
+    echo "  🚪 HTTP Port: ${CUSTOM_HTTP_PORT:-'80'}"
+    echo "  🔒 HTTPS Port: ${CUSTOM_HTTPS_PORT:-'443'}"
+    echo "  🔌 API Port: ${CUSTOM_API_PORT:-'8082'}"
+    echo "  🔐 SSL Enabled: ${CUSTOM_SSL_ENABLED:-'true'}"
+    echo "  🧠 Memory Limit: ${CUSTOM_MEMORY_LIMIT:-'2g'}"
+    echo "  ⚡ CPU Limit: ${CUSTOM_CPU_LIMIT:-'2'}"
+    echo "  💾 Backup Enabled: ${CUSTOM_BACKUP_ENABLED:-'true'}"
+    [[ "${CUSTOM_BACKUP_ENABLED:-true}" == "true" ]] && echo "  📅 Backup Retention: ${CUSTOM_BACKUP_RETENTION:-'30'} days"
+    echo "  🔑 JWT Secret: ${JWT_SECRET:+Set (hidden)} ${JWT_SECRET:-Not set}"
 }
 
 # Install systemd services
@@ -2593,12 +2912,57 @@ main_deploy() {
     # Post-deployment validation
     if verify_deployment_health; then
         log_success "🎉 InfraCore deployment completed successfully and health check passed!"
+        show_deployment_summary
     else
-        log_warning "Deployment completed but health check failed. Please review the system."
+        log_warning "Deployment completed but health check failed. Please review logs:"
+        log_info "  📋 Check status: sudo $0 --status"
+        log_info "  📝 View logs: sudo $0 --logs"
+        log_info "  🔧 Troubleshoot: sudo $0 --troubleshoot"
     fi
     
     # Show final status
     show_status
+}
+
+# Show deployment completion summary
+show_deployment_summary() {
+    echo
+    log_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_success "🚀 InfraCore is now running successfully!"
+    log_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Get server IP
+    local server_ip=$(curl -s -4 icanhazip.com 2>/dev/null || curl -s -4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}' || echo "localhost")
+    
+    echo
+    log_info "🌐 Access your InfraCore instance:"
+    if [[ "${CUSTOM_SSL_ENABLED:-true}" == "true" && -n "${CUSTOM_DOMAIN}" ]]; then
+        log_info "  🔒 Web Interface: https://${CUSTOM_DOMAIN}"
+        log_info "  🔌 API Endpoint:  https://${CUSTOM_DOMAIN}/api/v1"
+    else
+        log_info "  🌐 Web Interface: http://${server_ip}:${CUSTOM_HTTP_PORT:-80}"
+        log_info "  🔌 API Endpoint:  http://${server_ip}:${CUSTOM_API_PORT:-8082}/api/v1"
+    fi
+    
+    echo
+    log_info "📋 Quick Commands:"
+    log_info "  📊 Check Status:     sudo $0 --status"
+    log_info "  📝 View Logs:        sudo $0 --logs"
+    log_info "  🔄 Restart Services: sudo $0 --restart"
+    log_info "  ⚙️  Reconfigure:     sudo $0 --configure"
+    log_info "  🛠️  Troubleshoot:     sudo $0 --troubleshoot"
+    
+    echo
+    log_info "📚 Documentation and Support:"
+    log_info "  📖 GitHub: https://github.com/last-emo-boy/infra-core"
+    log_info "  🐛 Issues: https://github.com/last-emo-boy/infra-core/issues"
+    
+    # Show current configuration
+    show_config_summary
+    
+    echo
+    log_success "✨ Enjoy your InfraCore deployment!"
+    log_success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
 # Main execution
@@ -2616,6 +2980,14 @@ main() {
     
     # Check root access
     check_root
+    
+    # Welcome message for interactive deployments
+    if [[ "$ACTION" == "deploy" && "$NON_INTERACTIVE" != "true" ]]; then
+        echo
+        log_info "🎉 Welcome to InfraCore Deployment!"
+        log_info "This script will help you deploy and configure InfraCore with ease."
+        echo
+    fi
     
     # Execute based on action
     case "$ACTION" in
@@ -2645,6 +3017,13 @@ main() {
             ;;
         "upgrade")
             upgrade
+            ;;
+        "configure")
+            log_step "🔧 Running interactive configuration setup..."
+            cd "$DEPLOY_DIR/current" || { log_error "Deployment directory not found"; exit 1; }
+            setup_interactive_config
+            log_success "Configuration completed successfully!"
+            log_info "Run './server-deploy.sh --restart' to apply the new configuration"
             ;;
         "test-mirrors")
             log_step "🧪 Testing mirror speeds..."
