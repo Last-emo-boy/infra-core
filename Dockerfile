@@ -11,14 +11,16 @@ WORKDIR /app
 # Install dependencies with smart mirror selection
 RUN set -eux; \
     # Configure Alpine mirror based on build arguments or auto-detect
-    if [ -n "$ALPINE_MIRROR" ]; then \
-        echo "Using specified Alpine mirror: $ALPINE_MIRROR"; \
+    if [ -n "$ALPINE_MIRROR" ] && [ "$ALPINE_MIRROR" != "" ]; then \
+        echo "🚀 Using speed-tested optimal Alpine mirror: $ALPINE_MIRROR"; \
         echo "$ALPINE_MIRROR/v3.22/main" > /etc/apk/repositories; \
         echo "$ALPINE_MIRROR/v3.22/community" >> /etc/apk/repositories; \
     elif [ "$BUILD_REGION" = "cn" ]; then \
         echo "Using Chinese Alpine mirror"; \
         echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/main" > /etc/apk/repositories; \
         echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/community" >> /etc/apk/repositories; \
+    elif [ "$BUILD_REGION" = "optimized" ]; then \
+        echo "Using optimized configuration (mirrors selected by speed test)"; \
     fi; \
     # Install packages with fallback
     apk update --no-cache || { \
@@ -45,12 +47,15 @@ COPY go.mod go.sum ./
 # Download dependencies with smart Go proxy selection
 RUN set -eux; \
     # Configure Go proxy based on build arguments or region
-    if [ -n "$GO_PROXY" ]; then \
-        echo "Using specified Go proxy: $GO_PROXY"; \
+    if [ -n "$GO_PROXY" ] && [ "$GO_PROXY" != "" ]; then \
+        echo "🚀 Using speed-tested optimal Go proxy: $GO_PROXY"; \
         export GOPROXY="$GO_PROXY"; \
     elif [ "$BUILD_REGION" = "cn" ]; then \
         echo "Using Chinese Go proxy"; \
         export GOPROXY="https://goproxy.cn,direct"; \
+    elif [ "$BUILD_REGION" = "optimized" ]; then \
+        echo "Using optimized Go proxy (selected by speed test)"; \
+        export GOPROXY="${GO_PROXY:-https://proxy.golang.org,direct}"; \
     else \
         export GOPROXY="https://proxy.golang.org,direct"; \
     fi; \
@@ -108,12 +113,15 @@ RUN set -eux; \
     npm config set fetch-retry-mintimeout 20000; \
     npm config set fetch-retry-maxtimeout 120000; \
     # Configure NPM registry based on build arguments or region
-    if [ -n "$NPM_REGISTRY" ]; then \
-        echo "Using specified NPM registry: $NPM_REGISTRY"; \
+    if [ -n "$NPM_REGISTRY" ] && [ "$NPM_REGISTRY" != "" ]; then \
+        echo "🚀 Using speed-tested optimal NPM registry: $NPM_REGISTRY"; \
         npm config set registry "$NPM_REGISTRY"; \
     elif [ "$BUILD_REGION" = "cn" ]; then \
         echo "Using Chinese NPM registry"; \
         npm config set registry "https://registry.npmmirror.com/"; \
+    elif [ "$BUILD_REGION" = "optimized" ]; then \
+        echo "Using optimized NPM registry (selected by speed test)"; \
+        npm config set registry "${NPM_REGISTRY:-https://registry.npmjs.org/}"; \
     fi; \
     # Install with fallback
     npm ci --no-audit --no-fund || { \

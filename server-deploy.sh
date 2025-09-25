@@ -327,6 +327,7 @@ Options:
     --rollback              Rollback to previous deployment
     --status                Show deployment status
     --logs                  Show service logs
+    --test-mirrors          Test mirror speeds without deploying
     --restart               Restart services
     --stop                  Stop services
     --start                 Start services
@@ -342,6 +343,7 @@ Examples:
     $0 --upgrade --mirror                 # Interactive upgrade with mirrors
     $0 --status                          # Show current status
     $0 --logs                            # Show service logs
+    $0 --test-mirrors                    # Test mirror speeds
     $0 --update                          # Quick update to latest version
 
 EOF
@@ -411,6 +413,10 @@ parse_args() {
                 ;;
             --logs)
                 ACTION="logs"
+                shift
+                ;;
+            --test-mirrors)
+                ACTION="test-mirrors"
                 shift
                 ;;
             --restart)
@@ -1027,6 +1033,180 @@ EOF
 }
 
 # Advanced network environment detection (only when mirrors are enabled)
+# Compare floating point times (without bc dependency)
+is_time_better() {
+    local time1="$1"
+    local time2="$2"
+    
+    # Handle special case of 999 (failure)
+    if [[ "$time1" == "999" ]]; then
+        return 1  # time1 is not better
+    fi
+    if [[ "$time2" == "999" ]]; then
+        return 0  # time1 is better
+    fi
+    
+    # Convert to integer comparison (multiply by 1000 to handle decimals)
+    local int1=$(echo "$time1 * 1000" | awk '{printf "%.0f", $1}')
+    local int2=$(echo "$time2 * 1000" | awk '{printf "%.0f", $1}')
+    
+    [[ "$int1" -lt "$int2" ]]
+}
+
+# Test mirror connectivity and speed
+test_mirror_speed() {
+    local mirror_url="$1"
+    local test_path="$2"
+    local timeout_sec="${3:-8}"
+    
+    # Test connectivity and measure response time
+    local response_time=$(timeout "$timeout_sec" curl -s -w "%{time_total},%{http_code}" -o /dev/null "$mirror_url$test_path" 2>/dev/null || echo "999,000")
+    local time_total=$(echo "$response_time" | cut -d',' -f1)
+    local http_code=$(echo "$response_time" | cut -d',' -f2)
+    
+    # Return response time if successful (HTTP 200), otherwise return 999 (failure)
+    if [[ "$http_code" == "200" ]]; then
+        echo "$time_total"
+    else
+        echo "999"
+    fi
+}
+
+# Intelligently select best mirrors based on actual speed tests
+select_optimal_mirrors() {
+    log_info "🧪 Testing mirror speeds to find the fastest available options..."
+    
+    # Alpine mirrors to test
+    local alpine_mirrors=(
+        "https://mirrors.tuna.tsinghua.edu.cn/alpine,清华大学"
+        "https://mirrors.ustc.edu.cn/alpine,中科大"
+        "https://mirrors.aliyun.com/alpine,阿里云"
+        "https://mirror.sjtu.edu.cn/alpine,上海交大"
+        "https://dl-cdn.alpinelinux.org/alpine,官方CDN"
+        "https://uk.alpinelinux.org/alpine,英国镜像"
+    )
+    
+    # Go proxy mirrors to test
+    local go_proxies=(
+        "https://goproxy.cn,七牛云"
+        "https://goproxy.io,goproxy.io"
+        "https://mirrors.aliyun.com/goproxy,阿里云"
+        "https://proxy.golang.org,官方代理"
+    )
+    
+    # NPM registry mirrors to test
+    local npm_registries=(
+        "https://registry.npmmirror.com,淘宝镜像"
+        "https://registry.npm.taobao.org,淘宝镜像(旧)"
+        "https://r.cnpmjs.org,cnpmjs"
+        "https://registry.npmjs.org,官方源"
+    )
+    
+    # Test Alpine mirrors
+    log_info "📦 Testing Alpine package mirrors..."
+    local best_alpine_url=""
+    local best_alpine_name=""
+    local best_alpine_time="999"
+    
+    for mirror_info in "${alpine_mirrors[@]}"; do
+        local mirror_url=$(echo "$mirror_info" | cut -d',' -f1)
+        local mirror_name=$(echo "$mirror_info" | cut -d',' -f2)
+        
+        log_info "Testing $mirror_name ($mirror_url)..."
+        local response_time=$(test_mirror_speed "$mirror_url" "/v3.18/main/x86_64/APKINDEX.tar.gz" 8)
+        
+        if is_time_better "$response_time" "$best_alpine_time"; then
+            best_alpine_time="$response_time"
+            best_alpine_url="$mirror_url"
+            best_alpine_name="$mirror_name"
+        fi
+        
+        if [[ "$response_time" == "999" ]]; then
+            log_warning "  ❌ $mirror_name: Connection failed"
+        else
+            log_info "  ✅ $mirror_name: ${response_time}s"
+        fi
+    done
+    
+    # Test Go proxies
+    log_info "🔧 Testing Go module proxies..."
+    local best_go_proxy=""
+    local best_go_name=""
+    local best_go_time="999"
+    
+    for proxy_info in "${go_proxies[@]}"; do
+        local proxy_url=$(echo "$proxy_info" | cut -d',' -f1)
+        local proxy_name=$(echo "$proxy_info" | cut -d',' -f2)
+        
+        log_info "Testing $proxy_name ($proxy_url)..."
+        local response_time=$(test_mirror_speed "$proxy_url" "/github.com/gin-gonic/gin/@v/list" 6)
+        
+        if is_time_better "$response_time" "$best_go_time"; then
+            best_go_time="$response_time"
+            best_go_proxy="$proxy_url,direct"
+            best_go_name="$proxy_name"
+        fi
+        
+        if [[ "$response_time" == "999" ]]; then
+            log_warning "  ❌ $proxy_name: Connection failed"
+        else
+            log_info "  ✅ $proxy_name: ${response_time}s"
+        fi
+    done
+    
+    # Test NPM registries
+    log_info "📦 Testing NPM registries..."
+    local best_npm_registry=""
+    local best_npm_name=""
+    local best_npm_time="999"
+    
+    for registry_info in "${npm_registries[@]}"; do
+        local registry_url=$(echo "$registry_info" | cut -d',' -f1)
+        local registry_name=$(echo "$registry_info" | cut -d',' -f2)
+        
+        log_info "Testing $registry_name ($registry_url)..."
+        local response_time=$(test_mirror_speed "$registry_url" "/express" 6)
+        
+        if is_time_better "$response_time" "$best_npm_time"; then
+            best_npm_time="$response_time"
+            best_npm_registry="$registry_url"
+            best_npm_name="$registry_name"
+        fi
+        
+        if [[ "$response_time" == "999" ]]; then
+            log_warning "  ❌ $registry_name: Connection failed"
+        else
+            log_info "  ✅ $registry_name: ${response_time}s"
+        fi
+    done
+    
+    # Show results and return optimal configuration
+    echo "🎯 Optimal mirror selection results:"
+    if [[ "$best_alpine_time" != "999" ]]; then
+        echo "ALPINE_MIRROR=$best_alpine_url,ALPINE_NAME=$best_alpine_name,ALPINE_TIME=$best_alpine_time"
+        log_success "Best Alpine mirror: $best_alpine_name (${best_alpine_time}s)"
+    else
+        echo "ALPINE_MIRROR=,ALPINE_NAME=None,ALPINE_TIME=999"
+        log_error "No working Alpine mirror found!"
+    fi
+    
+    if [[ "$best_go_time" != "999" ]]; then
+        echo "GO_PROXY=$best_go_proxy,GO_NAME=$best_go_name,GO_TIME=$best_go_time"
+        log_success "Best Go proxy: $best_go_name (${best_go_time}s)"
+    else
+        echo "GO_PROXY=https://proxy.golang.org,direct,GO_NAME=Official,GO_TIME=999"
+        log_warning "No fast Go proxy found, using official proxy"
+    fi
+    
+    if [[ "$best_npm_time" != "999" ]]; then
+        echo "NPM_REGISTRY=$best_npm_registry/,NPM_NAME=$best_npm_name,NPM_TIME=$best_npm_time"
+        log_success "Best NPM registry: $best_npm_name (${best_npm_time}s)"
+    else
+        echo "NPM_REGISTRY=https://registry.npmjs.org/,NPM_NAME=Official,NPM_TIME=999"
+        log_warning "No fast NPM registry found, using official registry"
+    fi
+}
+
 detect_optimal_region() {
     # If mirrors are not enabled, always return global
     if [[ "$USE_MIRRORS" != "true" ]]; then
@@ -1034,47 +1214,28 @@ detect_optimal_region() {
         return
     fi
     
-    local china_sites=("baidu.com" "qq.com" "taobao.com" "163.com")
-    local global_sites=("google.com" "github.com" "cloudflare.com")
-    local china_score=0
-    local global_score=0
+    log_info "🌐 Detecting optimal mirror region with intelligent speed testing..."
     
-    log_info "Detecting optimal mirror region..."
+    # Use intelligent mirror selection instead of simple region detection
+    local mirror_results=$(select_optimal_mirrors)
     
-    # Test China sites
-    for site in "${china_sites[@]}"; do
-        if timeout 5 ping -c 1 -W 2 "$site" &>/dev/null; then
-            china_score=$((china_score + 1))
-            log_info "✓ Chinese site $site accessible"
+    # Parse results
+    local alpine_result=$(echo "$mirror_results" | grep "ALPINE_MIRROR=" | head -1)
+    local alpine_time=$(echo "$alpine_result" | sed 's/.*ALPINE_TIME=\([^,]*\).*/\1/')
+    
+    # If we found fast Chinese mirrors, use "cn", otherwise use "global"  
+    if [[ -n "$alpine_result" ]] && is_time_better "$alpine_time" "3.0"; then
+        # Check if it's a Chinese mirror
+        if echo "$alpine_result" | grep -E "(tuna|ustc|aliyun|sjtu|cn)" >/dev/null; then
+            echo "cn"
+            log_success "Selected Chinese region based on speed test results"
+        else
+            echo "global"
+            log_success "Selected global region based on speed test results"
         fi
-    done
-    
-    # Test global sites  
-    for site in "${global_sites[@]}"; do
-        if timeout 5 ping -c 1 -W 2 "$site" &>/dev/null; then
-            global_score=$((global_score + 1))
-            log_info "✓ Global site $site accessible"
-        fi
-    done
-    
-    # Speed test for mirror selection
-    local mirror_speeds=()
-    
-    # Test Alpine mirror speeds
-    log_info "Testing mirror speeds..."
-    for mirror in "mirrors.tuna.tsinghua.edu.cn" "mirrors.ustc.edu.cn" "dl-cdn.alpinelinux.org"; do
-        local speed=$(timeout 10 curl -s -w "%{time_total}" -o /dev/null "https://$mirror/alpine/v3.18/main/x86_64/APKINDEX.tar.gz" 2>/dev/null || echo "999")
-        mirror_speeds+=("$mirror:$speed")
-        log_info "Mirror $mirror response time: ${speed}s"
-    done
-    
-    # Determine best region
-    if [[ $china_score -ge 2 ]] && [[ $china_score -gt $global_score ]]; then
-        echo "cn"
-        log_success "Selected Chinese mirrors (china_score=$china_score, global_score=$global_score)"
     else
-        echo "global" 
-        log_success "Selected global mirrors (china_score=$china_score, global_score=$global_score)"
+        echo "global"
+        log_info "Using global region as fallback"
     fi
 }
 
@@ -1107,10 +1268,22 @@ build_docker_images() {
         log_info "Current directory: $(pwd)"
         log_info "Available compose files: $(ls -la *.yml *.yaml 2>/dev/null || echo 'None found')"
     
-    case "$region" in
-        "cn")
-            log_info "Configuring build for Chinese mirrors..."
-            cat > "$compose_override" << 'EOF'
+    # Get intelligent mirror recommendations
+    log_info "🎯 Getting optimal mirror configuration..."
+    local mirror_results=$(select_optimal_mirrors)
+    
+    # Parse the optimal mirror results
+    local alpine_line=$(echo "$mirror_results" | grep "ALPINE_MIRROR=" | head -1)
+    local go_line=$(echo "$mirror_results" | grep "GO_PROXY=" | head -1)  
+    local npm_line=$(echo "$mirror_results" | grep "NPM_REGISTRY=" | head -1)
+    
+    local optimal_alpine=$(echo "$alpine_line" | sed 's/ALPINE_MIRROR=\([^,]*\).*/\1/')
+    local optimal_go=$(echo "$go_line" | sed 's/GO_PROXY=\([^,]*\).*/\1/')
+    local optimal_npm=$(echo "$npm_line" | sed 's/NPM_REGISTRY=\([^,]*\).*/\1/')
+    
+    # Generate optimized docker-compose override based on test results
+    log_info "📝 Generating optimized build configuration..."
+    cat > "$compose_override" << EOF
 version: '3.8'
 services:
   infra-core:
@@ -1118,26 +1291,21 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        - BUILD_REGION=cn
-        - ALPINE_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
-        - GO_PROXY=https://goproxy.cn,direct
-        - NPM_REGISTRY=https://registry.npmmirror.com/
+        - BUILD_REGION=optimized
+        - ALPINE_MIRROR=${optimal_alpine}
+        - GO_PROXY=${optimal_go}
+        - NPM_REGISTRY=${optimal_npm}
 EOF
-            ;;
-        *)
-            log_info "Using global configuration with automatic fallback..."
-            cat > "$compose_override" << 'EOF'
-version: '3.8'
-services:
-  infra-core:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        - BUILD_REGION=global
-EOF
-            ;;
-    esac
+
+    # Show what we selected
+    local alpine_name=$(echo "$alpine_line" | sed 's/.*ALPINE_NAME=\([^,]*\).*/\1/')
+    local go_name=$(echo "$go_line" | sed 's/.*GO_NAME=\([^,]*\).*/\1/')
+    local npm_name=$(echo "$npm_line" | sed 's/.*NPM_NAME=\([^,]*\).*/\1/')
+    
+    log_success "🚀 Optimized configuration selected:"
+    log_info "  • Alpine packages: $alpine_name ($optimal_alpine)"  
+    log_info "  • Go modules: $go_name ($optimal_go)"
+    log_info "  • NPM packages: $npm_name ($optimal_npm)"
     
     # Debug: Verify the override file was created and show its contents
     if [[ -f "$compose_override" ]]; then
@@ -1890,6 +2058,11 @@ main() {
             ;;
         "upgrade")
             upgrade
+            ;;
+        "test-mirrors")
+            log_step "🧪 Testing mirror speeds..."
+            select_optimal_mirrors
+            log_success "Mirror speed test completed!"
             ;;
         *)
             log_error "Unknown action: $ACTION"
