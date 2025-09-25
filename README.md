@@ -386,15 +386,285 @@ npm run format
 npm run analyze
 ```
 
-## 🚀 部署指南
+## ✅ 安装验证与测试
+
+### 🧪 快速验证安装
+
+安装完成后，按照以下步骤验证系统是否正常运行：
+
+#### 1. 🔍 检查服务状态
+
+```bash
+# 使用部署脚本检查状态
+sudo ./server-deploy.sh --status
+
+# 或者手动检查 Docker 服务
+docker-compose ps
+
+# 查看服务日志
+docker-compose logs -f
+```
+
+预期输出示例：
+```
+✅ InfraCore Status Report
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🐳 Docker Services Status:
+  • infra-core_gate_1     ✅ Up (healthy) - 0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp
+  • infra-core_console_1  ✅ Up (healthy) - 0.0.0.0:8082->8082/tcp
+  • infra-core_ui_1       ✅ Up (healthy) - 0.0.0.0:5173->5173/tcp
+
+📊 System Resources:
+  • CPU Usage: 15.2%
+  • Memory Usage: 1.2GB / 8GB (15%)
+  • Disk Usage: 2.3GB / 100GB (2.3%)
+
+🌐 Network Endpoints:
+  • Web Console: http://localhost (or your-domain.com)
+  • API Server:  http://localhost:8082
+  • UI Dev Server: http://localhost:5173 (if in dev mode)
+```
+
+#### 2. 🌐 Web 界面测试
+
+打开浏览器访问以下地址：
+
+| 服务 | 地址 | 预期结果 |
+|------|------|----------|
+| **主界面** | `http://localhost` 或 `http://your-domain.com` | 显示登录页面 |
+| **API 健康检查** | `http://localhost:8082/api/v1/health` | 返回 JSON 健康状态 |
+| **开发环境 UI** | `http://localhost:5173` | React 开发服务器界面 |
+
+#### 3. � 登录功能测试
+
+```bash
+# 测试默认管理员登录
+curl -X POST http://localhost:8082/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}'
+```
+
+成功响应示例：
+```json
+{
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "role": "admin",
+      "created_at": "2025-01-01T00:00:00Z"
+    }
+  },
+  "message": "Login successful"
+}
+```
+
+#### 4. 📊 API 接口测试
+
+```bash
+# 获取 JWT 令牌（从上一步获取）
+TOKEN="your-jwt-token-here"
+
+# 测试用户信息接口
+curl -X GET http://localhost:8082/api/v1/users/profile \
+  -H "Authorization: Bearer $TOKEN"
+
+# 测试系统信息接口
+curl -X GET http://localhost:8082/api/v1/system/info \
+  -H "Authorization: Bearer $TOKEN"
+
+# 测试服务列表接口
+curl -X GET http://localhost:8082/api/v1/services \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 🔧 镜像速度测试
+
+在部署前，可以测试网络环境下最快的镜像源：
+
+```bash
+# 测试所有镜像源的速度
+sudo ./server-deploy.sh --test-mirrors
+```
+
+预期输出示例：
+```
+🧪 Testing mirror speeds to find the fastest available options...
+
+📦 Testing Alpine package mirrors...
+Testing 清华大学 (https://mirrors.tuna.tsinghua.edu.cn/alpine)...
+  ✅ 清华大学: 0.245s
+Testing 中科大 (https://mirrors.ustc.edu.cn/alpine)...
+  ✅ 中科大: 0.389s
+Testing 官方CDN (https://dl-cdn.alpinelinux.org/alpine)...
+  ❌ 官方CDN: Connection failed
+
+🔧 Testing Go module proxies...
+Testing 七牛云 (https://goproxy.cn)...
+  ✅ 七牛云: 0.156s
+Testing goproxy.io (https://goproxy.io)...
+  ✅ goproxy.io: 0.298s
+
+📦 Testing NPM registries...
+Testing 淘宝镜像 (https://registry.npmmirror.com)...
+  ✅ 淘宝镜像: 0.298s
+Testing 官方源 (https://registry.npmjs.org)...
+  ✅ 官方源: 1.234s
+
+🚀 Optimized configuration selected:
+  • Alpine packages: 清华大学 (https://mirrors.tuna.tsinghua.edu.cn/alpine)
+  • Go modules: 七牛云 (https://goproxy.cn,direct)
+  • NPM packages: 淘宝镜像 (https://registry.npmmirror.com/)
+```
+
+### 🚀 完整部署测试
+
+#### 使用智能镜像部署：
+
+```bash
+# 生产环境部署（推荐中国用户）
+sudo ./server-deploy.sh --mirror
+
+# 交互式升级部署
+sudo ./server-deploy.sh --upgrade --mirror
+
+# 自定义区域镜像
+sudo ./server-deploy.sh --mirror cn  # 中国镜像
+sudo ./server-deploy.sh --mirror us  # 美国镜像
+```
+
+#### 部署成功验证清单：
+
+- [ ] ✅ Docker 容器全部启动且状态为 `healthy`
+- [ ] ✅ Web 界面可正常访问（http://localhost）
+- [ ] ✅ API 健康检查返回正常状态
+- [ ] ✅ 管理员账户可正常登录
+- [ ] ✅ 系统信息页面显示正确数据
+- [ ] ✅ 服务管理功能正常工作
+- [ ] ✅ 日志查看功能正常
+
+### 🐛 常见问题排查
+
+#### 1. 端口占用问题
+
+```bash
+# 检查端口占用
+sudo netstat -tlnp | grep -E ':80|:443|:8082|:5173'
+
+# 或使用 ss 命令
+sudo ss -tlnp | grep -E ':80|:443|:8082|:5173'
+
+# 解决方案：修改配置文件或停止冲突服务
+sudo systemctl stop apache2 nginx  # 停止可能冲突的 Web 服务
+```
+
+#### 2. Docker 服务异常
+
+```bash
+# 查看详细错误日志
+docker-compose logs --tail=50 infra-core
+
+# 重启单个服务
+docker-compose restart console
+
+# 重建并启动服务
+docker-compose up -d --force-recreate --build
+```
+
+#### 3. 权限问题
+
+```bash
+# 检查部署目录权限
+ls -la /opt/infra-core/
+
+# 修复权限（如果需要）
+sudo chown -R infracore:infracore /opt/infra-core/
+sudo chmod -R 755 /opt/infra-core/
+```
+
+#### 4. 网络连接问题
+
+```bash
+# 测试内部网络连通性
+docker-compose exec console ping gate
+docker-compose exec gate ping console
+
+# 检查防火墙设置
+sudo ufw status
+sudo firewall-cmd --list-all  # CentOS/RHEL
+```
+
+#### 5. SSL/HTTPS 证书问题
+
+```bash
+# 检查证书状态
+docker-compose exec gate ls -la /data/acme/
+
+# 手动申请证书
+docker-compose exec gate certbot certonly --standalone -d your-domain.com
+
+# 查看证书日志
+docker-compose logs gate | grep -i cert
+```
+
+### 📊 性能基准测试
+
+#### 基本性能测试：
+
+```bash
+# API 响应时间测试
+curl -w "@curl-format.txt" -o /dev/null -s http://localhost:8082/api/v1/health
+
+# 创建 curl-format.txt 文件
+cat > curl-format.txt << 'EOF'
+     time_namelookup:  %{time_namelookup}\n
+        time_connect:  %{time_connect}\n
+     time_appconnect:  %{time_appconnect}\n
+    time_pretransfer:  %{time_pretransfer}\n
+       time_redirect:  %{time_redirect}\n
+  time_starttransfer:  %{time_starttransfer}\n
+                     ----------\n
+          time_total:  %{time_total}\n
+EOF
+```
+
+#### 负载测试（可选）：
+
+```bash
+# 使用 Apache Bench 进行负载测试
+ab -n 1000 -c 10 http://localhost:8082/api/v1/health
+
+# 使用 wrk 进行更复杂的负载测试
+wrk -t12 -c400 -d30s http://localhost:8082/api/v1/health
+```
+
+### 🔄 升级和维护测试
+
+```bash
+# 测试配置重载
+sudo ./server-deploy.sh --restart
+
+# 测试备份功能
+sudo ./server-deploy.sh --backup
+
+# 测试回滚功能
+sudo ./server-deploy.sh --rollback
+
+# 查看系统健康状况
+sudo ./server-deploy.sh --health-check
+```
+
+## �🚀 部署指南
 
 ### 🐳 Docker 部署
 
 #### 生产环境部署
 
 ```bash
-# 🚀 一键部署到生产环境
-./deploy.sh production
+# 🚀 一键部署到生产环境（推荐）
+sudo ./server-deploy.sh --mirror
 
 # 🔧 或者使用自定义配置
 docker-compose -f docker-compose.yml up -d

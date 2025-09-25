@@ -328,11 +328,15 @@ Options:
     --status                Show deployment status
     --logs                  Show service logs
     --test-mirrors          Test mirror speeds without deploying
+    --test-install          Run installation verification tests
+    --test-api              Run API functionality tests
+    --troubleshoot          Run troubleshooting diagnostics
     --restart               Restart services
     --stop                  Stop services
     --start                 Start services
     --update                Update to latest version without full deployment
     --upgrade               Interactive upgrade with confirmation prompt
+    --uninstall             Completely uninstall InfraCore and cleanup all components
 
 Examples:
     $0                                    # Deploy latest main branch (no mirrors)
@@ -344,7 +348,11 @@ Examples:
     $0 --status                          # Show current status
     $0 --logs                            # Show service logs
     $0 --test-mirrors                    # Test mirror speeds
+    $0 --test-install                    # Verify installation
+    $0 --test-api                        # Test API functions
+    $0 --troubleshoot                    # Run diagnostics
     $0 --update                          # Quick update to latest version
+    $0 --uninstall                       # Completely remove InfraCore
 
 EOF
 }
@@ -419,6 +427,18 @@ parse_args() {
                 ACTION="test-mirrors"
                 shift
                 ;;
+            --test-install)
+                ACTION="test-install"
+                shift
+                ;;
+            --test-api)
+                ACTION="test-api"
+                shift
+                ;;
+            --troubleshoot)
+                ACTION="troubleshoot"
+                shift
+                ;;
             --restart)
                 ACTION="restart"
                 shift
@@ -433,6 +453,10 @@ parse_args() {
                 ;;
             --update)
                 ACTION="update"
+                shift
+                ;;
+            --uninstall)
+                ACTION="uninstall"
                 shift
                 ;;
             *)
@@ -1964,6 +1988,410 @@ upgrade() {
     main_deploy
 }
 
+# Comprehensive uninstall function with safety checks
+uninstall_infracore() {
+    log_step "InfraCore Uninstallation Process"
+    
+    echo "╔══════════════════════════════════════════════════════════════════════════════╗"
+    echo "║                        ⚠️  INFRACORE UNINSTALL WARNING ⚠️                    ║"
+    echo "╠══════════════════════════════════════════════════════════════════════════════╣"
+    echo "║ This will PERMANENTLY REMOVE the following components:                        ║"
+    echo "║                                                                              ║"
+    echo "║ 🗂️  All deployment files and application data                                ║"
+    echo "║ 🐳 All Docker containers, images, and volumes                               ║"
+    echo "║ 🔧 All systemd services and configuration files                             ║"
+    echo "║ 👤 Service user account (if created by this script)                        ║"
+    echo "║ 📂 All log files and backups                                                ║"
+    echo "║ 🌐 SSL certificates and ACME configurations                                 ║"
+    echo "║                                                                              ║"
+    echo "║ ⛔ THIS ACTION CANNOT BE UNDONE WITHOUT A BACKUP! ⛔                        ║"
+    echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+    echo
+    
+    # Show current deployment information
+    local deployment_found=false
+    
+    log_info "Current InfraCore installation status:"
+    
+    # Check deployment directory
+    if [[ -d "$DEPLOY_DIR" ]]; then
+        deployment_found=true
+        local deploy_size=$(du -sh "$DEPLOY_DIR" 2>/dev/null | cut -f1 || echo "Unknown")
+        log_info "  📁 Deployment directory: $DEPLOY_DIR ($deploy_size)"
+        
+        # Check for git information
+        if [[ -d "$DEPLOY_DIR/current/.git" ]]; then
+            cd "$DEPLOY_DIR/current"
+            local current_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "Unknown")
+            local current_branch=$(git branch --show-current 2>/dev/null || echo "Unknown")
+            log_info "     Branch: $current_branch, Commit: $current_commit"
+        fi
+    else
+        log_info "  📁 Deployment directory: Not found"
+    fi
+    
+    # Check Docker containers
+    if command -v docker &>/dev/null; then
+        local containers=$(docker ps -a --filter "name=infra" --format "table {{.Names}}\t{{.Status}}" 2>/dev/null | tail -n +2)
+        if [[ -n "$containers" ]]; then
+            deployment_found=true
+            log_info "  🐳 Docker containers found:"
+            echo "$containers" | sed 's/^/     /'
+        else
+            log_info "  🐳 Docker containers: None found"
+        fi
+        
+        # Check Docker images
+        local images=$(docker images | grep -E "(infra|core)" | awk '{print $1":"$2"\t"$7$8}' 2>/dev/null)
+        if [[ -n "$images" ]]; then
+            log_info "  🖼️  Docker images found:"
+            echo "$images" | sed 's/^/     /'
+        fi
+        
+        # Check Docker volumes
+        local volumes=$(docker volume ls | grep -E "(infra|core)" | awk '{print $2}' 2>/dev/null)
+        if [[ -n "$volumes" ]]; then
+            log_info "  💾 Docker volumes found:"
+            echo "$volumes" | sed 's/^/     /'
+        fi
+    fi
+    
+    # Check systemd services
+    local services_found=""
+    for service in "infra-core-console" "infra-core-gate"; do
+        if systemctl list-unit-files "$service.service" &>/dev/null; then
+            local status=$(systemctl is-active "$service" 2>/dev/null || echo "inactive")
+            services_found+="     $service.service ($status)\n"
+            deployment_found=true
+        fi
+    done
+    
+    if [[ -n "$services_found" ]]; then
+        log_info "  🔧 Systemd services found:"
+        echo -e "$services_found"
+    else
+        log_info "  🔧 Systemd services: None found"
+    fi
+    
+    # Check service user
+    if id "$SERVICE_USER" &>/dev/null; then
+        deployment_found=true
+        log_info "  👤 Service user: $SERVICE_USER (exists)"
+    else
+        log_info "  👤 Service user: $SERVICE_USER (not found)"
+    fi
+    
+    # Check backup directory
+    if [[ -d "$BACKUP_DIR" ]]; then
+        local backup_count=$(find "$BACKUP_DIR" -name "*.tar.gz" 2>/dev/null | wc -l || echo "0")
+        local backup_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1 || echo "Unknown")
+        if [[ $backup_count -gt 0 ]]; then
+            log_info "  💾 Backups found: $backup_count files ($backup_size)"
+        else
+            log_info "  💾 Backup directory exists but empty"
+        fi
+    else
+        log_info "  💾 Backup directory: Not found"
+    fi
+    
+    # If no deployment found, offer to continue anyway
+    if [[ "$deployment_found" != "true" ]]; then
+        log_warning "No InfraCore installation detected!"
+        echo
+        echo -n "No deployment found. Continue with cleanup anyway? [y/N]: "
+        read -r force_cleanup
+        if [[ ! "$force_cleanup" =~ ^[Yy]$ ]]; then
+            log_info "Uninstall cancelled - no installation found"
+            exit 0
+        fi
+    fi
+    
+    echo
+    echo "🛡️  BACKUP RECOMMENDATION:"
+    echo "   Before proceeding, you should create a final backup of your data."
+    echo "   This includes databases, configuration files, and any custom modifications."
+    echo
+    
+    # Backup option
+    local create_final_backup=""
+    while [[ ! "$create_final_backup" =~ ^[YyNn]$ ]]; do
+        echo -n "Create a final backup before uninstalling? [Y/n]: "
+        read -r create_final_backup
+        create_final_backup=${create_final_backup:-y}  # Default to 'y'
+    done
+    
+    if [[ "$create_final_backup" =~ ^[Yy]$ ]]; then
+        log_info "Creating final backup before uninstall..."
+        CREATE_BACKUP=true
+        create_backup || log_warning "Backup creation failed, but continuing with uninstall"
+    fi
+    
+    echo
+    echo "🔴 FINAL CONFIRMATION:"
+    echo "   Type 'DELETE EVERYTHING' (exactly) to confirm permanent removal:"
+    echo -n "   > "
+    read -r final_confirmation
+    
+    if [[ "$final_confirmation" != "DELETE EVERYTHING" ]]; then
+        log_info "Uninstall cancelled - confirmation phrase not matched"
+        exit 0
+    fi
+    
+    log_warning "Starting permanent uninstallation process..."
+    echo
+    
+    # Perform the actual uninstall
+    perform_complete_uninstall
+}
+
+# Perform complete uninstall of all components
+perform_complete_uninstall() {
+    log_step "Executing comprehensive uninstall..."
+    
+    local uninstall_errors=0
+    
+    # 1. Stop all services gracefully
+    log_info "🛑 Stopping all InfraCore services..."
+    
+    # Stop Docker services
+    if command -v docker &>/dev/null && [[ -f "$DEPLOY_DIR/current/docker-compose.yml" ]]; then
+        cd "$DEPLOY_DIR/current" 2>/dev/null
+        if docker-compose -f docker-compose.yml down --remove-orphans 2>/dev/null; then
+            log_success "Docker services stopped successfully"
+        else
+            log_warning "Failed to stop Docker services gracefully"
+            uninstall_errors=$((uninstall_errors + 1))
+        fi
+    fi
+    
+    # Stop systemd services
+    for service in "infra-core-console" "infra-core-gate"; do
+        if systemctl is-active "$service" &>/dev/null; then
+            if systemctl stop "$service" 2>/dev/null; then
+                log_success "Stopped $service"
+            else
+                log_warning "Failed to stop $service"
+                uninstall_errors=$((uninstall_errors + 1))
+            fi
+        fi
+        
+        if systemctl is-enabled "$service" &>/dev/null; then
+            if systemctl disable "$service" 2>/dev/null; then
+                log_success "Disabled $service"
+            else
+                log_warning "Failed to disable $service"
+            fi
+        fi
+    done
+    
+    # 2. Remove Docker components
+    log_info "🐳 Cleaning up Docker components..."
+    
+    if command -v docker &>/dev/null; then
+        # Remove containers
+        local containers=$(docker ps -a --filter "name=infra" --format "{{.ID}}" 2>/dev/null)
+        if [[ -n "$containers" ]]; then
+            echo "$containers" | xargs -r docker rm -f 2>/dev/null && log_success "Removed InfraCore containers" || log_warning "Failed to remove some containers"
+        fi
+        
+        # Remove images
+        local images=$(docker images --filter "reference=*infra*" --filter "reference=*core*" --format "{{.ID}}" 2>/dev/null)
+        if [[ -n "$images" ]]; then
+            echo "$images" | xargs -r docker rmi -f 2>/dev/null && log_success "Removed InfraCore images" || log_warning "Failed to remove some images"
+        fi
+        
+        # Remove volumes
+        local volumes=$(docker volume ls --filter "name=infra" --filter "name=core" --format "{{.Name}}" 2>/dev/null)
+        if [[ -n "$volumes" ]]; then
+            echo "$volumes" | xargs -r docker volume rm -f 2>/dev/null && log_success "Removed InfraCore volumes" || log_warning "Failed to remove some volumes"
+        fi
+        
+        # Clean up unused Docker resources
+        docker system prune -f 2>/dev/null && log_success "Cleaned up unused Docker resources"
+    fi
+    
+    # 3. Remove systemd service files
+    log_info "🔧 Removing systemd service files..."
+    
+    local service_files=(
+        "/etc/systemd/system/infra-core-console.service"
+        "/etc/systemd/system/infra-core-gate.service"
+    )
+    
+    for service_file in "${service_files[@]}"; do
+        if [[ -f "$service_file" ]]; then
+            if rm -f "$service_file" 2>/dev/null; then
+                log_success "Removed $service_file"
+            else
+                log_warning "Failed to remove $service_file"
+                uninstall_errors=$((uninstall_errors + 1))
+            fi
+        fi
+    done
+    
+    systemctl daemon-reload 2>/dev/null
+    
+    # 4. Remove all deployment files and directories
+    log_info "🗂️  Removing deployment files and directories..."
+    
+    local directories_to_remove=(
+        "$DEPLOY_DIR"
+        "/etc/infra-core"
+        "/var/lib/infra-core"
+        "/var/log/infra-core"
+    )
+    
+    for dir in "${directories_to_remove[@]}"; do
+        if [[ -d "$dir" ]]; then
+            if rm -rf "$dir" 2>/dev/null; then
+                log_success "Removed directory: $dir"
+            else
+                log_warning "Failed to remove directory: $dir"
+                uninstall_errors=$((uninstall_errors + 1))
+            fi
+        fi
+    done
+    
+    # 5. Remove backups (with additional confirmation)
+    if [[ -d "$BACKUP_DIR" ]]; then
+        local backup_count=$(find "$BACKUP_DIR" -name "*.tar.gz" 2>/dev/null | wc -l || echo "0")
+        if [[ $backup_count -gt 0 ]]; then
+            log_warning "Found $backup_count backup files in $BACKUP_DIR"
+            echo -n "Remove backup files too? [y/N]: "
+            read -r remove_backups
+            if [[ "$remove_backups" =~ ^[Yy]$ ]]; then
+                if rm -rf "$BACKUP_DIR" 2>/dev/null; then
+                    log_success "Removed backup directory: $BACKUP_DIR"
+                else
+                    log_warning "Failed to remove backup directory: $BACKUP_DIR"
+                fi
+            else
+                log_info "Backup directory preserved: $BACKUP_DIR"
+            fi
+        fi
+    fi
+    
+    # 6. Remove service user (with caution)
+    log_info "👤 Handling service user account..."
+    
+    if id "$SERVICE_USER" &>/dev/null; then
+        # Check if user has other processes or files
+        local user_processes=$(ps -u "$SERVICE_USER" --no-headers 2>/dev/null | wc -l || echo "0")
+        local user_files=$(find / -user "$SERVICE_USER" -not -path "/proc/*" -not -path "/sys/*" 2>/dev/null | wc -l || echo "0")
+        
+        if [[ $user_processes -gt 0 ]]; then
+            log_warning "User $SERVICE_USER has running processes ($user_processes). Skipping user removal."
+        elif [[ $user_files -gt 0 ]]; then
+            log_warning "User $SERVICE_USER owns files outside deployment ($user_files). Skipping user removal."
+        else
+            echo -n "Remove service user '$SERVICE_USER'? [Y/n]: "
+            read -r remove_user
+            remove_user=${remove_user:-y}
+            
+            if [[ "$remove_user" =~ ^[Yy]$ ]]; then
+                if userdel "$SERVICE_USER" 2>/dev/null; then
+                    log_success "Removed service user: $SERVICE_USER"
+                else
+                    log_warning "Failed to remove service user: $SERVICE_USER"
+                fi
+            else
+                log_info "Service user preserved: $SERVICE_USER"
+            fi
+        fi
+    fi
+    
+    # 7. Clean up any remaining configuration fragments
+    log_info "🧹 Cleaning up remaining configuration fragments..."
+    
+    # Remove nginx configurations if they exist
+    local nginx_configs=(
+        "/etc/nginx/sites-available/infra-core"
+        "/etc/nginx/sites-enabled/infra-core"
+    )
+    
+    for nginx_config in "${nginx_configs[@]}"; do
+        if [[ -f "$nginx_config" ]]; then
+            rm -f "$nginx_config" 2>/dev/null && log_success "Removed Nginx config: $nginx_config"
+        fi
+    done
+    
+    # Remove any cron jobs
+    if command -v crontab &>/dev/null && crontab -u "$SERVICE_USER" -l 2>/dev/null | grep -q "infra-core"; then
+        log_info "Found InfraCore cron jobs, removing..."
+        crontab -u "$SERVICE_USER" -r 2>/dev/null && log_success "Removed cron jobs"
+    fi
+    
+    # Clean up any remaining processes
+    local remaining_processes=$(pgrep -f "infra.*core" 2>/dev/null)
+    if [[ -n "$remaining_processes" ]]; then
+        log_warning "Found remaining InfraCore processes, terminating..."
+        echo "$remaining_processes" | xargs -r kill -TERM 2>/dev/null
+        sleep 3
+        echo "$remaining_processes" | xargs -r kill -KILL 2>/dev/null || true
+    fi
+    
+    # 8. Final verification
+    log_step "Performing final verification..."
+    
+    local remaining_issues=0
+    
+    # Check for remaining files
+    local remaining_files=$(find /opt /etc /var -name "*infra*core*" -o -name "*infracore*" 2>/dev/null | grep -v "/proc/" | grep -v "/sys/" | head -10)
+    if [[ -n "$remaining_files" ]]; then
+        log_warning "Some files may still remain:"
+        echo "$remaining_files" | sed 's/^/  /'
+        remaining_issues=$((remaining_issues + 1))
+    fi
+    
+    # Check for remaining Docker resources
+    if command -v docker &>/dev/null; then
+        local remaining_docker=$(docker ps -a --filter "name=infra" --format "{{.Names}}" 2>/dev/null)
+        if [[ -n "$remaining_docker" ]]; then
+            log_warning "Some Docker containers may still remain: $remaining_docker"
+            remaining_issues=$((remaining_issues + 1))
+        fi
+    fi
+    
+    # Check for remaining services
+    for service in "infra-core-console" "infra-core-gate"; do
+        if systemctl list-unit-files "$service.service" &>/dev/null; then
+            log_warning "Service file may still exist: $service.service"
+            remaining_issues=$((remaining_issues + 1))
+        fi
+    done
+    
+    # Final summary
+    echo
+    log_step "Uninstall Summary"
+    
+    if [[ $uninstall_errors -eq 0 && $remaining_issues -eq 0 ]]; then
+        log_success "🎉 InfraCore has been completely uninstalled!"
+        log_success "✅ All components removed successfully"
+        log_info "   • All services stopped and removed"
+        log_info "   • All Docker resources cleaned up"
+        log_info "   • All deployment files deleted"
+        log_info "   • System configuration restored"
+    elif [[ $uninstall_errors -gt 0 || $remaining_issues -gt 0 ]]; then
+        log_warning "⚠️  Uninstall completed with some issues:"
+        if [[ $uninstall_errors -gt 0 ]]; then
+            log_warning "   • $uninstall_errors errors occurred during uninstall"
+        fi
+        if [[ $remaining_issues -gt 0 ]]; then
+            log_warning "   • $remaining_issues potential remaining components detected"
+        fi
+        log_info "   • Most components were successfully removed"
+        log_info "   • You may need to manually clean up remaining items"
+    fi
+    
+    echo
+    log_info "If you plan to reinstall InfraCore in the future:"
+    log_info "  • Use the same deployment script with standard options"
+    log_info "  • Backups are preserved (if not explicitly removed)"
+    log_info "  • System dependencies (Docker, etc.) are still available"
+    
+    log_info "Thank you for using InfraCore! 🚀"
+}
+
 # Main deployment function
 main_deploy() {
     log_step "Starting InfraCore deployment..."
@@ -2063,6 +2491,39 @@ main() {
             log_step "🧪 Testing mirror speeds..."
             select_optimal_mirrors
             log_success "Mirror speed test completed!"
+            ;;
+        "test-install")
+            log_step "✅ Running installation verification tests..."
+            if [[ -f "scripts/test-installation.sh" ]]; then
+                chmod +x scripts/test-installation.sh
+                bash scripts/test-installation.sh
+            else
+                log_error "Test script not found: scripts/test-installation.sh"
+                exit 1
+            fi
+            ;;
+        "test-api")
+            log_step "🧪 Running API functionality tests..."
+            if [[ -f "scripts/test-api.sh" ]]; then
+                chmod +x scripts/test-api.sh
+                bash scripts/test-api.sh
+            else
+                log_error "Test script not found: scripts/test-api.sh"
+                exit 1
+            fi
+            ;;
+        "troubleshoot")
+            log_step "🔧 Running troubleshooting diagnostics..."
+            if [[ -f "scripts/troubleshoot.sh" ]]; then
+                chmod +x scripts/troubleshoot.sh
+                bash scripts/troubleshoot.sh
+            else
+                log_error "Troubleshoot script not found: scripts/troubleshoot.sh"
+                exit 1
+            fi
+            ;;
+        "uninstall")
+            uninstall_infracore
             ;;
         *)
             log_error "Unknown action: $ACTION"
