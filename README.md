@@ -19,7 +19,8 @@
 [![GitHub pull requests](https://img.shields.io/github/issues-pr/Last-emo-boy/infra-core)](https://github.com/Last-emo-boy/infra-core/pulls)
 [![GitHub stars](https://img.shields.io/github/stars/Last-emo-boy/infra-core?style=social)](https://github.com/Last-emo-boy/infra-core/stargazers)
 
-[![Wakatime](https://wakatime.com/badge/github/Last-emo-boy/infra-core.svg)](https://wakatime.com/badge/github/Last-emo-boy/infra-core)
+[![wakatime](https://wakatime.com/badge/user/5bd3393a-a3b1-48aa-90a2-bcf1f6bfcb7f/project/58091149-5978-444c-8aba-dc8c8ef8f045.svg)](https://wakatime.com/badge/user/5bd3393a-a3b1-48aa-90a2-bcf1f6bfcb7f/project/58091149-5978-444c-8aba-dc8c8ef8f045)
+
 [![Contributors](https://img.shields.io/github/contributors/Last-emo-boy/infra-core)](https://github.com/Last-emo-boy/infra-core/graphs/contributors)
 [![Last Commit](https://img.shields.io/github/last-commit/Last-emo-boy/infra-core)](https://github.com/Last-emo-boy/infra-core/commits/main)
 [![Code Size](https://img.shields.io/github/languages/code-size/Last-emo-boy/infra-core)](https://github.com/Last-emo-boy/infra-core)
