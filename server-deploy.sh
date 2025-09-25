@@ -1079,7 +1079,9 @@ detect_optimal_region() {
 }
 
 # Build Docker images with optional mirror optimization  
-build_with_mirrors() {
+build_docker_images() {
+    log_info "Mirror settings: USE_MIRRORS=$USE_MIRRORS, MIRROR_REGION=$MIRROR_REGION"
+    
     if [[ "$USE_MIRRORS" == "true" ]]; then
         log_step "Building Docker images with mirror optimization..."
         
@@ -1100,6 +1102,10 @@ build_with_mirrors() {
         
         # Create temporary docker-compose override for build args
         local compose_override="docker-compose.build-override.yml"
+        
+        # Debug: Show current directory and available files
+        log_info "Current directory: $(pwd)"
+        log_info "Available compose files: $(ls -la *.yml *.yaml 2>/dev/null || echo 'None found')"
     
     case "$region" in
         "cn")
@@ -1132,6 +1138,15 @@ services:
 EOF
             ;;
     esac
+    
+    # Debug: Verify the override file was created and show its contents
+    if [[ -f "$compose_override" ]]; then
+        log_info "Created build override file: $compose_override"
+        log_info "Override file contents:"
+        cat "$compose_override" | sed 's/^/  /'
+    else
+        log_warning "Failed to create override file: $compose_override"
+    fi
     
     # Enhanced Docker build with retry and optimization
     log_info "Starting robust Docker build process..."
@@ -1181,11 +1196,19 @@ EOF
                 timeout_duration=1200
                 ;;
             "standard_with_cache")
-                build_cmd="docker-compose -f docker-compose.yml build --parallel"
+                if [[ -f "$compose_override" ]]; then
+                    build_cmd="docker-compose -f docker-compose.yml -f '$compose_override' build --parallel"
+                else
+                    build_cmd="docker-compose -f docker-compose.yml build --parallel"
+                fi
                 timeout_duration=900
                 ;;
             "standard_no_cache")
-                build_cmd="docker-compose -f docker-compose.yml build --no-cache --parallel" 
+                if [[ -f "$compose_override" ]]; then
+                    build_cmd="docker-compose -f docker-compose.yml -f '$compose_override' build --no-cache --parallel"
+                else
+                    build_cmd="docker-compose -f docker-compose.yml build --no-cache --parallel"
+                fi
                 timeout_duration=1200
                 ;;
             "fallback_minimal")
@@ -1193,7 +1216,11 @@ EOF
                 log_warning "Attempting fallback build with cache cleanup..."
                 docker builder prune -f 2>/dev/null || true
                 docker system prune -f 2>/dev/null || true
-                build_cmd="docker-compose -f docker-compose.yml build --no-cache"
+                if [[ -f "$compose_override" ]]; then
+                    build_cmd="docker-compose -f docker-compose.yml -f '$compose_override' build --no-cache"
+                else
+                    build_cmd="docker-compose -f docker-compose.yml build --no-cache"
+                fi
                 timeout_duration=1800
                 ;;
         esac
@@ -1375,12 +1402,12 @@ deploy_docker() {
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         log_info "Pulling latest image from registry..."
         docker pull "$REGISTRY/$IMAGE_NAME:latest" || {
-            log_warning "Failed to pull image, building locally with mirror optimization..."
-            build_with_mirrors
+            log_warning "Failed to pull image, building locally..."
+            build_docker_images
         }
     else
-        log_info "Building Docker images locally with mirror optimization..."
-        build_with_mirrors
+        log_info "Building Docker images locally..."
+        build_docker_images
     fi
     
     # Setup environment configuration
