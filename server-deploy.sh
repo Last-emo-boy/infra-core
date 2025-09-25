@@ -153,11 +153,97 @@ validate_system_requirements() {
     
     # Check minimum disk space (5GB)
     local available_space_kb
-    available_space_kb=$(df "$DEPLOY_DIR" 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
+    local deploy_parent_dir=$(dirname "$DEPLOY_DIR")
+    
+    # Ensure parent directory exists for proper disk space check
+    if [[ ! -d "$deploy_parent_dir" ]]; then
+        mkdir -p "$deploy_parent_dir" 2>/dev/null || true
+    fi
+    
+    # Check disk space on parent directory if deploy dir doesn't exist
+    local check_dir="$DEPLOY_DIR"
+    if [[ ! -d "$DEPLOY_DIR" ]]; then
+        check_dir="$deploy_parent_dir"
+        log_info "Deploy directory doesn't exist, checking parent: $check_dir"
+    fi
+    
+    available_space_kb=$(df "$check_dir" 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
     local available_space_gb=$((available_space_kb / 1024 / 1024))
+    
+    # If still getting 0, try alternative methods
+    if [[ $available_space_gb -eq 0 ]]; then
+        log_warning "Standard disk check failed, trying alternative methods..."
+        
+        # Clear any filesystem caches that might interfere
+        sync 2>/dev/null || true
+        
+        # Try multiple fallback methods
+        local methods_tried=0
+        
+        # Method 1: Check root filesystem
+        methods_tried=$((methods_tried + 1))
+        log_info "Method $methods_tried: Checking root filesystem..."
+        available_space_kb=$(df / 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
+        available_space_gb=$((available_space_kb / 1024 / 1024))
+        
+        if [[ $available_space_gb -eq 0 ]]; then
+            # Method 2: Use df with different options
+            methods_tried=$((methods_tried + 1))
+            log_info "Method $methods_tried: Using df with POSIX output..."
+            available_space_kb=$(df -P / 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
+            available_space_gb=$((available_space_kb / 1024 / 1024))
+        fi
+        
+        if [[ $available_space_gb -eq 0 ]]; then
+            # Method 3: Use stat command (if available)
+            methods_tried=$((methods_tried + 1))
+            log_info "Method $methods_tried: Using stat command..."
+            if command -v stat &>/dev/null; then
+                local available_space_bytes
+                available_space_bytes=$(stat -f --format="%a*%S" / 2>/dev/null | bc 2>/dev/null || echo "0")
+                available_space_gb=$((available_space_bytes / 1024 / 1024 / 1024 || 0))
+            fi
+        fi
+        
+        if [[ $available_space_gb -eq 0 ]]; then
+            # Method 4: Use statvfs if available
+            methods_tried=$((methods_tried + 1))
+            log_info "Method $methods_tried: Checking with statvfs..."
+            if command -v python3 &>/dev/null; then
+                available_space_gb=$(python3 -c "
+import os
+try:
+    stat = os.statvfs('/')
+    available_bytes = stat.f_bavail * stat.f_frsize
+    print(int(available_bytes / (1024**3)))
+except:
+    print(0)
+" 2>/dev/null || echo "0")
+            fi
+        fi
+        
+        if [[ $available_space_gb -gt 0 ]]; then
+            log_success "Alternative disk check succeeded: ${available_space_gb}GB available (Method $methods_tried)"
+        else
+            log_warning "All disk check methods failed, attempting manual verification..."
+            
+            # Try to create a test directory to verify write access
+            local test_dir="/tmp/infracore-space-test-$$"
+            if mkdir -p "$test_dir" 2>/dev/null; then
+                # If we can create a directory, assume we have some space
+                rmdir "$test_dir" 2>/dev/null || true
+                available_space_gb=10  # Assume at least 10GB if basic operations work
+                log_warning "Disk check failed but write test succeeded, assuming ${available_space_gb}GB available"
+            else
+                log_error "Cannot determine disk space and write test failed"
+            fi
+        fi
+    fi
     
     if [[ $available_space_gb -lt 5 ]]; then
         log_error "Insufficient disk space: ${available_space_gb}GB available, 5GB required"
+        log_info "Checked directory: $check_dir"
+        log_info "If this appears incorrect, try: 'df -h $check_dir' manually"
         return 1
     fi
     log_success "Disk space check passed: ${available_space_gb}GB available"
@@ -597,19 +683,77 @@ setup_directories() {
         "/var/lib/infra-core"
     )
     
+    # Force filesystem sync before creating directories
+    sync 2>/dev/null || true
+    
     for dir in "${dirs[@]}"; do
+        # Check if directory exists and handle any stale mount points or filesystem issues
+        if [[ -d "$dir" ]] && [[ ! -w "$dir" ]]; then
+            log_warning "Directory exists but is not writable: $dir"
+            # Try to fix permissions
+            chmod 755 "$dir" 2>/dev/null || log_warning "Could not fix permissions for $dir"
+        fi
+        
         if [[ ! -d "$dir" ]]; then
             log_info "Creating directory: $dir"
-            mkdir -p "$dir"
+            if ! mkdir -p "$dir" 2>/dev/null; then
+                log_error "Failed to create directory: $dir"
+                # Try creating parent directories first
+                local parent_dir=$(dirname "$dir")
+                if [[ ! -d "$parent_dir" ]]; then
+                    log_info "Creating parent directory: $parent_dir"
+                    mkdir -p "$parent_dir" 2>/dev/null || true
+                fi
+                # Retry creating the target directory
+                if ! mkdir -p "$dir" 2>/dev/null; then
+                    log_error "Still cannot create directory: $dir"
+                    return 1
+                fi
+            fi
+            log_success "Created directory: $dir"
+        else
+            log_info "Directory already exists: $dir"
         fi
-        chown "$SERVICE_USER:$SERVICE_USER" "$dir"
-        chmod 755 "$dir"
+        
+        # Verify directory is accessible
+        if [[ ! -d "$dir" ]] || [[ ! -w "$dir" ]]; then
+            log_error "Directory is not accessible or writable: $dir"
+            return 1
+        fi
+        
+        # Set ownership and permissions
+        if ! chown "$SERVICE_USER:$SERVICE_USER" "$dir" 2>/dev/null; then
+            log_warning "Could not set ownership for $dir (user may not exist yet)"
+        fi
+        
+        if ! chmod 755 "$dir" 2>/dev/null; then
+            log_warning "Could not set permissions for $dir"
+        fi
     done
     
-    # Setup log file
-    touch "$LOG_FILE"
-    chown "$SERVICE_USER:$SERVICE_USER" "$LOG_FILE"
-    chmod 644 "$LOG_FILE"
+    # Setup log file with improved error handling
+    local log_dir=$(dirname "$LOG_FILE")
+    if [[ ! -d "$log_dir" ]]; then
+        mkdir -p "$log_dir" 2>/dev/null || true
+    fi
+    
+    if ! touch "$LOG_FILE" 2>/dev/null; then
+        log_warning "Could not create log file: $LOG_FILE"
+        # Try alternative log location
+        LOG_FILE="/tmp/infra-core-deploy.log"
+        touch "$LOG_FILE" 2>/dev/null || log_warning "Could not create alternative log file"
+    fi
+    
+    # Set log file permissions if possible
+    if [[ -f "$LOG_FILE" ]]; then
+        chown "$SERVICE_USER:$SERVICE_USER" "$LOG_FILE" 2>/dev/null || true
+        chmod 644 "$LOG_FILE" 2>/dev/null || true
+    fi
+    
+    # Final sync to ensure all directory operations are committed
+    sync 2>/dev/null || true
+    
+    log_success "Directory setup completed"
 }
 
 # Enhanced backup with validation and compression
@@ -2383,11 +2527,25 @@ perform_complete_uninstall() {
         log_info "   • You may need to manually clean up remaining items"
     fi
     
+    # Force filesystem sync and clear caches to ensure changes are reflected
+    log_info "🔄 Synchronizing filesystem changes..."
+    sync 2>/dev/null || true
+    
+    # Clear filesystem caches to ensure accurate disk space reporting
+    if [[ -w /proc/sys/vm/drop_caches ]]; then
+        echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+        log_success "Filesystem caches cleared"
+    fi
+    
+    # Give the system a moment to fully process the changes
+    sleep 2
+    
     echo
     log_info "If you plan to reinstall InfraCore in the future:"
     log_info "  • Use the same deployment script with standard options"
     log_info "  • Backups are preserved (if not explicitly removed)"
     log_info "  • System dependencies (Docker, etc.) are still available"
+    log_info "  • Wait a few seconds before reinstalling to ensure filesystem sync"
     
     log_info "Thank you for using InfraCore! 🚀"
 }

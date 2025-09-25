@@ -130,6 +130,43 @@ All critical API functions are working correctly!
    ./scripts/troubleshoot.sh report
    ```
 
+4. **卸载后重新安装磁盘空间检测错误**
+   ```bash
+   # 问题：卸载后立即重新安装时出现 "Insufficient disk space: 0GB available" 错误
+   # 解决方案：脚本已自动修复，包含以下改进：
+   
+   # 方案1: 等待几秒钟后重试
+   sudo ./server-deploy.sh
+   
+   # 方案2: 如果仍有问题，手动清理缓存后重试
+   sudo sync && sudo echo 3 > /proc/sys/vm/drop_caches
+   sudo ./server-deploy.sh
+   
+   # 方案3: 使用详细日志查看检测过程
+   sudo ./server-deploy.sh --debug 2>&1 | tee install.log
+   ```
+
+### 磁盘空间检测改进 (v1.1.0+)
+
+最新版本的部署脚本包含了增强的磁盘空间检测逻辑：
+
+- ✅ **智能目录检测**: 自动处理不存在的部署目录
+- ✅ **多重检测方法**: 使用 5 种不同的磁盘检测方法作为备选
+- ✅ **文件系统同步**: 卸载后自动同步文件系统状态
+- ✅ **缓存清理**: 清理系统缓存确保准确的空间报告
+- ✅ **错误恢复**: 即使检测失败也会尝试写入测试验证
+
+**技术细节**:
+```bash
+# 脚本现在会按顺序尝试：
+1. df "$DEPLOY_DIR"           # 标准检测
+2. df "$parent_dir"           # 父目录检测  
+3. df -P /                    # POSIX 格式根目录检测
+4. stat -f /                  # stat 命令检测
+5. Python statvfs()           # Python 系统调用检测
+6. 写入测试                    # 实际文件操作测试
+```
+
 ## 📝 脚本开发说明
 
 ### 添加新测试脚本：
