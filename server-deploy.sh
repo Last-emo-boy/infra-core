@@ -331,6 +331,7 @@ Options:
     --stop                  Stop services
     --start                 Start services
     --update                Update to latest version without full deployment
+    --upgrade               Interactive upgrade with confirmation prompt
 
 Examples:
     $0                                    # Deploy latest main branch (no mirrors)
@@ -338,6 +339,7 @@ Examples:
     $0 --mirror                           # Deploy with auto-detected mirrors
     $0 --branch develop --env staging     # Deploy develop branch to staging
     $0 --backup --mirror cn               # Deploy with backup and Chinese mirrors
+    $0 --upgrade --mirror                 # Interactive upgrade with mirrors
     $0 --status                          # Show current status
     $0 --logs                            # Show service logs
     $0 --update                          # Quick update to latest version
@@ -394,6 +396,10 @@ parse_args() {
                     MIRROR_REGION="auto"
                     shift
                 fi
+                ;;
+            --upgrade)
+                ACTION="upgrade"
+                shift
                 ;;
             --rollback)
                 ACTION="rollback"
@@ -943,14 +949,50 @@ safe_rollback() {
     fi
 }
 
-# Clone or update repository
+# Clone or update repository with optional GitHub mirror
 update_repository() {
     log_step "Updating repository..."
     
     local temp_dir="$DEPLOY_DIR/tmp-$(date +%s)"
+    local clone_url="$REPO_URL"
     
-    log_info "Cloning repository to: $temp_dir"
-    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$temp_dir"
+    # Use GitHub mirror if mirrors are enabled and it's a GitHub repo
+    if [[ "$USE_MIRRORS" == "true" && "$REPO_URL" =~ github\.com ]]; then
+        local github_mirrors=(
+            "https://ghfast.top/"
+            "https://github.moeyy.xyz/"
+            "https://gh-proxy.com/"
+            "https://ghproxy.com/"
+        )
+        
+        log_info "Mirror mode enabled, trying GitHub mirrors..."
+        local clone_success=false
+        
+        for mirror in "${github_mirrors[@]}"; do
+            local mirror_url="${mirror}${REPO_URL}"
+            log_info "Trying GitHub mirror: $mirror_url"
+            
+            if timeout 60 git clone --depth 1 --branch "$BRANCH" "$mirror_url" "$temp_dir" 2>/dev/null; then
+                log_success "Successfully cloned using mirror: $mirror"
+                clone_success=true
+                break
+            else
+                log_warning "Mirror $mirror failed, trying next..."
+                rm -rf "$temp_dir" 2>/dev/null || true
+            fi
+        done
+        
+        if [[ "$clone_success" != "true" ]]; then
+            log_warning "All GitHub mirrors failed, falling back to original URL"
+            clone_url="$REPO_URL"
+        fi
+    fi
+    
+    # Clone with original URL if mirrors disabled or all mirrors failed
+    if [[ ! -d "$temp_dir" ]]; then
+        log_info "Cloning repository to: $temp_dir"
+        git clone --depth 1 --branch "$BRANCH" "$clone_url" "$temp_dir"
+    fi
     
     # Get commit info
     local commit_hash=$(cd "$temp_dir" && git rev-parse HEAD)
@@ -1660,6 +1702,73 @@ quick_update() {
     log_success "Quick update completed successfully"
 }
 
+# Interactive upgrade with user confirmation
+upgrade() {
+    log_step "Interactive upgrade process..."
+    
+    echo "╔══════════════════════════════════════════════════════════════════════════════╗"
+    echo "║                          INFRACORE UPGRADE CONFIRMATION                       ║"
+    echo "╠══════════════════════════════════════════════════════════════════════════════╣"
+    echo "║ This will perform the following actions:                                      ║"
+    echo "║ • Create a backup of current deployment                                       ║"
+    echo "║ • Update repository to latest version                                         ║"
+    echo "║ • Rebuild and restart all services                                            ║"
+    echo "║ • Verify deployment health                                                     ║"
+    echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+    echo
+    
+    # Show current status
+    log_info "Current deployment information:"
+    if [ -d "$DEPLOY_DIR" ]; then
+        if [ -d "$DEPLOY_DIR/.git" ]; then
+            cd "$DEPLOY_DIR"
+            local current_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "Unknown")
+            local current_branch=$(git branch --show-current 2>/dev/null || echo "Unknown")
+            log_info "  Current commit: $current_commit"
+            log_info "  Current branch: $current_branch"
+        fi
+        local deploy_size=$(du -sh "$DEPLOY_DIR" 2>/dev/null | cut -f1 || echo "Unknown")
+        log_info "  Deploy directory size: $deploy_size"
+    else
+        log_info "  No existing deployment found"
+    fi
+    
+    # Show what will be updated to
+    log_info "Target deployment information:"
+    log_info "  Repository: $REPO_URL"
+    log_info "  Branch: $BRANCH"
+    log_info "  Environment: $ENVIRONMENT"
+    if [ "$USE_MIRRORS" = true ]; then
+        log_info "  Using mirrors: Yes (Region: $MIRROR_REGION)"
+    else
+        log_info "  Using mirrors: No"
+    fi
+    
+    echo
+    echo "⚠️  WARNING: This operation will temporarily stop your services during the upgrade."
+    echo "💾 A backup will be created automatically before proceeding."
+    echo
+    
+    # Interactive confirmation
+    local confirmation=""
+    while [[ ! "$confirmation" =~ ^[YyNn]$ ]]; do
+        echo -n "Do you want to proceed with the upgrade? [y/N]: "
+        read -r confirmation
+        confirmation=${confirmation:-n}  # Default to 'n' if empty
+    done
+    
+    if [[ "$confirmation" =~ ^[Nn]$ ]]; then
+        log_info "Upgrade cancelled by user"
+        exit 0
+    fi
+    
+    log_success "User confirmed upgrade. Starting deployment..."
+    echo
+    
+    # Perform the actual upgrade (same as main deployment)
+    main_deploy
+}
+
 # Main deployment function
 main_deploy() {
     log_step "Starting InfraCore deployment..."
@@ -1751,6 +1860,9 @@ main() {
             ;;
         "update")
             quick_update
+            ;;
+        "upgrade")
+            upgrade
             ;;
         *)
             log_error "Unknown action: $ACTION"
