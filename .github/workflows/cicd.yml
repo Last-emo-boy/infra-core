@@ -377,6 +377,42 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
     
+    - name: Sync tags and clean up conflicts
+      run: |
+        echo "🔄 Syncing tags from remote..."
+        git fetch --tags --force
+        
+        # 检查当前版本文件内容
+        if [ -f VERSION ]; then
+          CURRENT_VERSION=$(cat VERSION)
+          echo "Current VERSION file content: $CURRENT_VERSION"
+          
+          # 计算下一个可能的beta版本标签
+          NEXT_BETA_TAG="v${CURRENT_VERSION%%-*}-beta.$((${CURRENT_VERSION##*beta.} + 1))"
+          if [[ "$CURRENT_VERSION" =~ beta ]]; then
+            NEXT_BETA_TAG="v${CURRENT_VERSION%%-*}-beta.$((${CURRENT_VERSION##*beta.} + 1))"
+          else
+            # 如果当前不是beta版本，则创建新的beta.0版本
+            NEXT_BETA_TAG="v${CURRENT_VERSION}-beta.0"
+          fi
+          echo "Expected next beta tag: $NEXT_BETA_TAG"
+          
+          # 如果预期的下一个标签已存在，删除它
+          if git tag -l | grep -q "^$NEXT_BETA_TAG$"; then
+            echo "⚠️ Tag $NEXT_BETA_TAG already exists, removing it to avoid conflicts..."
+            git tag -d "$NEXT_BETA_TAG" || true
+            git push origin ":refs/tags/$NEXT_BETA_TAG" || true
+            echo "✅ Removed conflicting tag $NEXT_BETA_TAG"
+            
+            # 等待一下确保远程删除生效
+            sleep 3
+          fi
+        fi
+        
+        # 显示当前标签状态
+        echo "Current tags (last 10):"
+        git tag -l | sort -V | tail -10
+    
     - name: Detect release type from commit
       id: detect
       run: |
@@ -433,31 +469,91 @@ jobs:
       if: steps.detect.outputs.should-release == 'true'
       run: |
         RELEASE_TYPE="${{ steps.detect.outputs.release-type }}"
+        echo "🚀 Creating $RELEASE_TYPE release..."
         
+        # 创建一个重试函数
+        retry_release() {
+          local attempt=1
+          local max_attempts=3
+          local cmd="$1"
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt/$max_attempts: $cmd"
+            
+            if eval "$cmd"; then
+              echo "✅ Release creation succeeded on attempt $attempt"
+              return 0
+            else
+              echo "❌ Release creation failed on attempt $attempt"
+              
+              if [ $attempt -lt $max_attempts ]; then
+                echo "🔄 Cleaning up and retrying..."
+                
+                # 重新同步标签，可能远程有新的更改
+                git fetch --tags --force
+                
+                # 如果有冲突的标签，删除它们
+                if [ -f VERSION ]; then
+                  CURRENT_VERSION=$(cat VERSION)
+                  # 检查是否有阻塞的标签
+                  POTENTIAL_TAG="v$CURRENT_VERSION"
+                  if git tag -l | grep -q "^$POTENTIAL_TAG$"; then
+                    echo "Removing conflicting tag: $POTENTIAL_TAG"
+                    git tag -d "$POTENTIAL_TAG" || true
+                    git push origin ":refs/tags/$POTENTIAL_TAG" || true
+                  fi
+                fi
+                
+                sleep 5
+              fi
+              
+              attempt=$((attempt + 1))
+            fi
+          done
+          
+          echo "💥 All release creation attempts failed"
+          return 1
+        }
+        
+        # 根据发布类型执行相应的命令
         case "$RELEASE_TYPE" in
           "alpha")
-            standard-version --prerelease alpha
+            retry_release "standard-version --prerelease alpha"
             ;;
           "beta")
-            standard-version --prerelease beta
+            retry_release "standard-version --prerelease beta"
             ;;
           "patch")
-            standard-version --release-as patch
+            retry_release "standard-version --release-as patch"
             ;;
           "minor")
-            standard-version --release-as minor
+            retry_release "standard-version --release-as minor"
             ;;
           "major")
-            standard-version --release-as major
+            retry_release "standard-version --release-as major"
             ;;
           *)
-            standard-version --prerelease beta
+            retry_release "standard-version --prerelease beta"
             ;;
         esac
         
+        # 获取创建的版本
         version=$(git describe --tags --abbrev=0)
         echo "version=$version" >> $GITHUB_OUTPUT
-        echo "Created $RELEASE_TYPE release: $version"
+        echo "✅ Successfully created $RELEASE_TYPE release: $version"
+        
+        # 验证版本和标签的一致性
+        if [ -f VERSION ]; then
+          version_file_content=$(cat VERSION)
+          echo "VERSION file content: $version_file_content"
+          echo "Git tag: $version"
+          
+          if [[ "$version" == "v$version_file_content" ]]; then
+            echo "✅ Version consistency check passed"
+          else
+            echo "⚠️ Version mismatch detected but continuing..."
+          fi
+        fi
     
     - name: Download all artifacts
       if: steps.detect.outputs.should-release == 'true'
@@ -482,7 +578,57 @@ jobs:
     - name: Push changes and tags
       if: steps.detect.outputs.should-release == 'true'
       run: |
-        git push --follow-tags origin main
+        echo "🚀 Pushing changes and tags to remote..."
+        
+        # 显示将要推送的内容
+        echo "📝 Changes to be pushed:"
+        git log --oneline HEAD~1..HEAD || echo "No new commits"
+        
+        echo "🏷️ Tags to be pushed:"
+        git tag -l --points-at HEAD || echo "No tags at HEAD"
+        
+        # 推送更改和标签，带重试机制
+        retry_push() {
+          local attempt=1
+          local max_attempts=3
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "Push attempt $attempt/$max_attempts..."
+            
+            if git push --follow-tags origin main; then
+              echo "✅ Push succeeded on attempt $attempt"
+              return 0
+            else
+              echo "❌ Push failed on attempt $attempt"
+              
+              if [ $attempt -lt $max_attempts ]; then
+                echo "🔄 Fetching latest changes and retrying..."
+                git fetch origin main
+                
+                # 检查是否需要合并或有冲突
+                LOCAL=$(git rev-parse HEAD)
+                REMOTE=$(git rev-parse origin/main)
+                
+                if [ "$LOCAL" != "$REMOTE" ]; then
+                  echo "⚠️ Remote has changes, attempting to sync..."
+                  git pull --rebase origin main || {
+                    echo "💥 Rebase failed, manual intervention may be needed"
+                    exit 1
+                  }
+                fi
+                
+                sleep 3
+              fi
+              
+              attempt=$((attempt + 1))
+            fi
+          done
+          
+          echo "💥 All push attempts failed"
+          return 1
+        }
+        
+        retry_push
     
     - name: Create GitHub Release
       if: steps.detect.outputs.should-release == 'true'
@@ -547,6 +693,15 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
+    
+    - name: Sync tags and clean up conflicts
+      run: |
+        echo "🔄 Syncing tags for manual release..."
+        git fetch --tags --force
+        
+        # 显示当前标签状态
+        echo "Current tags (last 10):"
+        git tag -l | sort -V | tail -10
     
     - name: Download all artifacts
       uses: actions/download-artifact@v4
