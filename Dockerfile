@@ -10,6 +10,9 @@ WORKDIR /app
 
 # Install dependencies with smart mirror selection
 RUN set -eux; \
+    echo "🐛 Debug Go Builder: BUILD_REGION=$BUILD_REGION"; \
+    echo "🐛 Debug Go Builder: ALPINE_MIRROR=$ALPINE_MIRROR"; \
+    echo "🐛 Debug Go Builder: GO_PROXY=$GO_PROXY"; \
     # Configure Alpine mirror based on build arguments or auto-detect
     if [ -n "$ALPINE_MIRROR" ] && [ "$ALPINE_MIRROR" != "" ]; then \
         echo "🚀 Using speed-tested optimal Alpine mirror: $ALPINE_MIRROR"; \
@@ -24,11 +27,12 @@ RUN set -eux; \
     fi; \
     # Install packages with fallback
     apk update --no-cache || { \
-        echo "Primary mirror failed, trying fallback mirrors..."; \
+        echo "Primary mirror failed, trying fallback mirrors (prioritizing fast mirrors)..."; \
         for mirror in \
-            "https://dl-cdn.alpinelinux.org/alpine" \
+            "https://mirrors.tuna.tsinghua.edu.cn/alpine" \
             "https://mirrors.ustc.edu.cn/alpine" \
-            "https://mirrors.aliyun.com/alpine"; do \
+            "https://mirrors.aliyun.com/alpine" \
+            "https://dl-cdn.alpinelinux.org/alpine"; do \
             echo "Trying fallback mirror: $mirror"; \
             echo "$mirror/v3.22/main" > /etc/apk/repositories; \
             echo "$mirror/v3.22/community" >> /etc/apk/repositories; \
@@ -175,33 +179,74 @@ ENTRYPOINT ["/usr/local/bin/console"]
 # Alternative production stage with Alpine (if you need shell access for debugging)
 FROM alpine:latest AS production-debug
 
+# Build arguments for mirror selection
+ARG BUILD_REGION=auto
+ARG ALPINE_MIRROR=""
+
 # Install runtime dependencies with retry mechanism and multiple mirrors
 RUN set -eux; \
-    # Try Alpine mirrors one by one (sh-compatible syntax)
-    for mirror in \
-        "https://dl-cdn.alpinelinux.org/alpine" \
-        "https://mirrors.tuna.tsinghua.edu.cn/alpine" \
-        "https://mirrors.ustc.edu.cn/alpine" \
-        "https://mirrors.aliyun.com/alpine" \
-        "https://mirror.nju.edu.cn/alpine" \
-        "https://mirrors.huaweicloud.com/alpine"; do \
-        echo "Trying mirror: $mirror"; \
-        echo "$mirror/latest-stable/main" > /etc/apk/repositories && \
-        echo "$mirror/latest-stable/community" >> /etc/apk/repositories && \
-        # Test the mirror with update
-        if apk update --no-cache 2>/dev/null; then \
-            echo "Successfully using mirror: $mirror"; \
-            # Install packages
-            if apk add --no-cache ca-certificates tzdata wget curl; then \
-                echo "Packages installed successfully with mirror: $mirror"; \
-                break; \
-            else \
-                echo "Package installation failed with mirror: $mirror, trying next..."; \
-            fi; \
+    echo "🐛 Debug: BUILD_REGION=$BUILD_REGION"; \
+    echo "🐛 Debug: ALPINE_MIRROR=$ALPINE_MIRROR"; \
+    # Configure Alpine mirror based on build arguments or auto-detect
+    if [ -n "$ALPINE_MIRROR" ] && [ "$ALPINE_MIRROR" != "" ]; then \
+        echo "🚀 Using speed-tested optimal Alpine mirror: $ALPINE_MIRROR"; \
+        echo "$ALPINE_MIRROR/latest-stable/main" > /etc/apk/repositories; \
+        echo "$ALPINE_MIRROR/latest-stable/community" >> /etc/apk/repositories; \
+        if apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl; then \
+            echo "✅ Packages installed successfully with optimal mirror: $ALPINE_MIRROR"; \
         else \
-            echo "Mirror $mirror failed, trying next..."; \
+            echo "❌ Optimal mirror failed, falling back to multiple mirrors..."; \
+            # Fallback to multiple mirrors if optimal fails - prioritize fast mirrors
+            for mirror in \
+                "https://mirrors.tuna.tsinghua.edu.cn/alpine" \
+                "https://mirrors.ustc.edu.cn/alpine" \
+                "https://mirrors.aliyun.com/alpine" \
+                "https://mirror.nju.edu.cn/alpine" \
+                "https://mirrors.huaweicloud.com/alpine" \
+                "https://dl-cdn.alpinelinux.org/alpine"; do \
+                echo "Trying fallback mirror: $mirror"; \
+                echo "$mirror/latest-stable/main" > /etc/apk/repositories && \
+                echo "$mirror/latest-stable/community" >> /etc/apk/repositories && \
+                if apk update --no-cache 2>/dev/null && apk add --no-cache ca-certificates tzdata wget curl; then \
+                    echo "✅ Packages installed successfully with fallback mirror: $mirror"; \
+                    break; \
+                fi; \
+                echo "❌ Fallback mirror $mirror failed, trying next..."; \
+            done; \
         fi; \
-    done; \
+    elif [ "$BUILD_REGION" = "cn" ]; then \
+        echo "Using Chinese Alpine mirror (region-based)"; \
+        echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/latest-stable/main" > /etc/apk/repositories; \
+        echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/latest-stable/community" >> /etc/apk/repositories; \
+        apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl; \
+    else \
+        echo "Using default mirror fallback strategy (prioritizing fast mirrors)"; \
+        # Try Alpine mirrors one by one - prioritize fast Chinese mirrors first
+        for mirror in \
+            "https://mirrors.tuna.tsinghua.edu.cn/alpine" \
+            "https://mirrors.ustc.edu.cn/alpine" \
+            "https://mirrors.aliyun.com/alpine" \
+            "https://mirror.nju.edu.cn/alpine" \
+            "https://mirrors.huaweicloud.com/alpine" \
+            "https://dl-cdn.alpinelinux.org/alpine"; do \
+            echo "Trying mirror: $mirror"; \
+            echo "$mirror/latest-stable/main" > /etc/apk/repositories && \
+            echo "$mirror/latest-stable/community" >> /etc/apk/repositories && \
+            # Test the mirror with update
+            if apk update --no-cache 2>/dev/null; then \
+                echo "Successfully using mirror: $mirror"; \
+                # Install packages
+                if apk add --no-cache ca-certificates tzdata wget curl; then \
+                    echo "Packages installed successfully with mirror: $mirror"; \
+                    break; \
+                else \
+                    echo "Package installation failed with mirror: $mirror, trying next..."; \
+                fi; \
+            else \
+                echo "Mirror $mirror failed, trying next..."; \
+            fi; \
+        done; \
+    fi; \
     # Verify curl is installed
     curl --version
 

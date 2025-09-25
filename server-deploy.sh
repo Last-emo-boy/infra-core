@@ -1458,6 +1458,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: production-debug
       args:
         - BUILD_REGION=optimized
         - ALPINE_MIRROR=${optimal_alpine}
