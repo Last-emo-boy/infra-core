@@ -28,7 +28,7 @@ console:
     timeout: "30s"
   auth:
     jwt:
-      secret: ""  # Must be set via environment variable
+      secret: "production-jwt-secret-change-this-in-real-deployment-f8b2e4a9c1d3f6e8"
       expires_hours: 8
     session:
       timeout_minutes: 30
