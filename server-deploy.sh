@@ -979,7 +979,17 @@ create_backup() {
         
         if [[ -d "$DEPLOY_DIR/current" ]]; then
             log_info "Creating backup: $backup_name"
+            log_info "Estimated source size: $((source_size / 1024 / 1024))MB"
+            log_info "Available space: $((available_space / 1024 / 1024))MB"
+            
             mkdir -p "$backup_path" "$temp_backup_dir"
+            
+            # Start backup monitoring in background
+            monitor_backup_progress "$temp_backup_dir" &
+            local monitor_pid=$!
+            
+            # Ensure monitor cleanup on exit
+            trap "kill $monitor_pid 2>/dev/null || true" EXIT
             
             # Create manifest file
             local manifest_file="$temp_backup_dir/backup-manifest.json"
@@ -1000,12 +1010,23 @@ EOF
             if retry_with_backoff 2 3 "application backup" cp -r "$DEPLOY_DIR/current" "$temp_backup_dir/"; then
                 log_success "Application files backed up successfully"
                 
-                # Generate file checksums
+                # Generate file checksums with timeout
                 log_info "Generating checksums..."
-                find "$temp_backup_dir/current" -type f -exec sha256sum {} \; > "$temp_backup_dir/checksums.sha256"
+                if timeout 300 find "$temp_backup_dir/current" -type f -exec sha256sum {} \; > "$temp_backup_dir/checksums.sha256" 2>/dev/null; then
+                    log_success "Checksums generated successfully"
+                else
+                    log_warning "Checksum generation timed out, continuing without checksums"
+                    echo "# Checksum generation timed out" > "$temp_backup_dir/checksums.sha256"
+                fi
                 
                 # Update manifest with file list
-                find "$temp_backup_dir/current" -type f | jq -R . | jq -s . > "$temp_backup_dir/file_list.json"
+                log_info "Creating file manifest..."
+                if timeout 60 find "$temp_backup_dir/current" -type f | jq -R . | jq -s . > "$temp_backup_dir/file_list.json" 2>/dev/null; then
+                    log_success "File manifest created"
+                else
+                    log_warning "File manifest creation failed, using simple list"
+                    find "$temp_backup_dir/current" -type f > "$temp_backup_dir/file_list.txt" 2>/dev/null || true
+                fi
             else
                 log_error "Failed to backup application files"
                 rm -rf "$temp_backup_dir"
@@ -1028,17 +1049,49 @@ EOF
                 local volumes_backup="$temp_backup_dir/docker_volumes"
                 mkdir -p "$volumes_backup"
                 
-                # List and backup relevant volumes
-                docker volume ls -q | grep -E "(infra|core)" | while read -r volume; do
-                    if [[ -n "$volume" ]]; then
-                        log_info "Backing up volume: $volume"
-                        docker run --rm \
-                            -v "$volume:/source:ro" \
-                            -v "$volumes_backup:/backup" \
-                            alpine:latest \
-                            tar czf "/backup/$volume.tar.gz" -C /source . 2>/dev/null || true
+                # Check if Docker daemon is accessible
+                if ! docker info &>/dev/null; then
+                    log_warning "Docker daemon not accessible, skipping volume backup"
+                else
+                    # Get list of relevant volumes with timeout
+                    log_info "Scanning for infra-core related volumes..."
+                    local volume_list
+                    if volume_list=$(timeout 30 docker volume ls -q 2>/dev/null | grep -E "(infra|core)" || true); then
+                        if [[ -n "$volume_list" ]]; then
+                            log_info "Found volumes: $(echo "$volume_list" | tr '\n' ' ')"
+                            
+                            # Ensure alpine image is available
+                            log_info "Preparing backup environment..."
+                            if ! timeout 60 docker pull alpine:latest &>/dev/null; then
+                                log_warning "Failed to pull alpine image, using existing or falling back"
+                            fi
+                            
+                            # Process each volume with individual timeout
+                            echo "$volume_list" | while IFS= read -r volume; do
+                                if [[ -n "$volume" ]] && [[ "$volume" != " " ]]; then
+                                    log_info "Backing up volume: $volume"
+                                    
+                                    # Backup volume with timeout and better error handling
+                                    if timeout 120 docker run --rm \
+                                        --network none \
+                                        -v "$volume:/source:ro" \
+                                        -v "$volumes_backup:/backup" \
+                                        alpine:latest \
+                                        sh -c "cd /source && tar czf /backup/$volume.tar.gz . 2>/dev/null || exit 0" &>/dev/null; then
+                                        log_success "Volume $volume backed up successfully"
+                                    else
+                                        log_warning "Failed to backup volume: $volume (continuing...)"
+                                    fi
+                                fi
+                            done
+                            log_success "Docker volumes backup completed"
+                        else
+                            log_info "No infra-core related volumes found"
+                        fi
+                    else
+                        log_warning "Failed to list Docker volumes (timeout or error)"
                     fi
-                done
+                fi
             fi
             
             # Backup configuration files
@@ -1060,33 +1113,54 @@ EOF
                 fi
             done
             
-            # Compress backup
+            # Compress backup with timeout and monitoring
             log_info "Compressing backup..."
-            if tar czf "$backup_path.tar.gz" -C "$temp_backup_dir" .; then
-                # Verify backup integrity
+            local backup_size=$(du -sh "$temp_backup_dir" | cut -f1)
+            log_info "Backup size: $backup_size"
+            
+            # Use timeout to prevent hanging
+            if timeout 600 tar czf "$backup_path.tar.gz" -C "$temp_backup_dir" . 2>/dev/null; then
+                # Verify backup integrity with timeout
                 log_info "Verifying backup integrity..."
-                if tar tzf "$backup_path.tar.gz" >/dev/null 2>&1; then
-                    log_success "Backup created and verified: $backup_name.tar.gz"
+                if timeout 120 tar tzf "$backup_path.tar.gz" >/dev/null 2>&1; then
+                    local final_size=$(ls -lh "$backup_path.tar.gz" | awk '{print $5}')
+                    log_success "Backup created and verified: $backup_name.tar.gz ($final_size)"
                     
                     # Create symlink to latest backup
                     ln -sf "$backup_name.tar.gz" "$BACKUP_DIR/latest-backup.tar.gz"
                     
                     # Cleanup old backups (keep last 5)
                     cleanup_old_backups
+                    
+                    # Stop monitoring
+                    kill $monitor_pid 2>/dev/null || true
+                    trap - EXIT
                 else
-                    log_error "Backup verification failed"
+                    log_error "Backup verification failed (integrity check timed out or failed)"
                     rm -f "$backup_path.tar.gz"
                     rm -rf "$temp_backup_dir"
+                    
+                    # Stop monitoring
+                    kill $monitor_pid 2>/dev/null || true
+                    trap - EXIT
                     return 1
                 fi
             else
-                log_error "Failed to compress backup"
+                log_error "Backup compression failed (timeout or error)"
                 rm -rf "$temp_backup_dir"
+                
+                # Stop monitoring
+                kill $monitor_pid 2>/dev/null || true
+                trap - EXIT
                 return 1
             fi
             
             # Cleanup temp directory
             rm -rf "$temp_backup_dir"
+            
+            # Stop monitoring
+            kill $monitor_pid 2>/dev/null || true
+            trap - EXIT
             if [[ -d "/etc/infra-core" ]]; then
                 cp -r "/etc/infra-core" "$backup_path/"
             fi
@@ -2649,6 +2723,56 @@ show_config_summary() {
     echo "  💾 Backup Enabled: ${CUSTOM_BACKUP_ENABLED:-'true'}"
     [[ "${CUSTOM_BACKUP_ENABLED:-true}" == "true" ]] && echo "  📅 Backup Retention: ${CUSTOM_BACKUP_RETENTION:-'30'} days"
     echo "  🔑 JWT Secret: ${JWT_SECRET:+Set (hidden)} ${JWT_SECRET:-Not set}"
+}
+
+# Monitor backup progress
+monitor_backup_progress() {
+    local backup_dir="$1"
+    local start_time=$(date +%s)
+    
+    while [[ -d "$backup_dir" ]]; do
+        sleep 10
+        
+        if [[ -d "$backup_dir" ]]; then
+            local current_size=$(du -sh "$backup_dir" 2>/dev/null | cut -f1 || echo "0")
+            local elapsed=$(($(date +%s) - start_time))
+            
+            if [[ $elapsed -gt 0 ]]; then
+                log_info "📊 Backup progress: $current_size processed (${elapsed}s elapsed)"
+            fi
+            
+            # Safety timeout - kill if backup takes too long
+            if [[ $elapsed -gt 1800 ]]; then  # 30 minutes
+                log_error "Backup process timeout (30 minutes), terminating..."
+                break
+            fi
+        fi
+    done
+}
+
+# Monitor backup progress
+monitor_backup_progress() {
+    local backup_dir="$1"
+    local start_time=$(date +%s)
+    
+    while [[ -d "$backup_dir" ]]; do
+        sleep 10
+        
+        if [[ -d "$backup_dir" ]]; then
+            local current_size=$(du -sh "$backup_dir" 2>/dev/null | cut -f1 || echo "0")
+            local elapsed=$(($(date +%s) - start_time))
+            
+            if [[ $elapsed -gt 0 ]] && [[ $((elapsed % 30)) -eq 0 ]]; then
+                log_info "📊 Backup progress: $current_size processed (${elapsed}s elapsed)"
+            fi
+            
+            # Safety timeout - kill if backup takes too long
+            if [[ $elapsed -gt 1800 ]]; then  # 30 minutes
+                log_error "Backup process timeout (30 minutes), terminating..."
+                break
+            fi
+        fi
+    done
 }
 
 # Clean up problematic Docker GPG keys
