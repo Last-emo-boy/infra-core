@@ -8,9 +8,12 @@ services:
     container_name: infra-core
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-      - "8082:8082"
+      - "80:80"        # Gate HTTP
+      - "443:443"      # Gate HTTPS  
+      - "8082:8082"    # Console API
+      - "9090:9090"    # Orchestrator
+      - "8085:8085"    # Probe Monitor
+      - "8086:8086"    # Snap Service
     volumes:
       - infra_data:/var/lib/infra-core
       - infra_logs:/var/log/infra-core

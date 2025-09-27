@@ -1864,6 +1864,24 @@ deploy_binary() {
     wait_for_services
 }
 
+# Validate and sanitize port input
+validate_port() {
+    local port_input="$1"
+    local default_port="$2"
+    local port_name="$3"
+    
+    # Take only the first line/word from input
+    port_input=$(echo "$port_input" | head -n1 | awk '{print $1}')
+    
+    # Validate port number
+    if [[ -n "$port_input" ]] && ! [[ "$port_input" =~ ^[0-9]+$ ]] || [[ "$port_input" -lt 1 || "$port_input" -gt 65535 ]]; then
+        log_warning "Invalid $port_name port '$port_input'. Using default: $default_port"
+        echo "$default_port"
+    else
+        echo "${port_input:-$default_port}"
+    fi
+}
+
 # Interactive configuration setup
 setup_interactive_config() {
     log_step "🔧 Interactive Configuration Setup"
@@ -1912,13 +1930,13 @@ setup_interactive_config() {
     local current_api_port=$(grep "port:" "$DEPLOY_DIR/current/configs/production.yaml" | awk '{print $2}' || echo "8082")
     
     read -p "🌐 HTTP port [$current_http_port]: " http_port_input
-    CUSTOM_HTTP_PORT="${http_port_input:-$current_http_port}"
+    CUSTOM_HTTP_PORT=$(validate_port "$http_port_input" "$current_http_port" "HTTP")
     
     read -p "🔒 HTTPS port [$current_https_port]: " https_port_input
-    CUSTOM_HTTPS_PORT="${https_port_input:-$current_https_port}"
+    CUSTOM_HTTPS_PORT=$(validate_port "$https_port_input" "$current_https_port" "HTTPS")
     
     read -p "🔌 API port [$current_api_port]: " api_port_input
-    CUSTOM_API_PORT="${api_port_input:-$current_api_port}"
+    CUSTOM_API_PORT=$(validate_port "$api_port_input" "$current_api_port" "API")
     
     # 4. SSL/TLS configuration
     echo
