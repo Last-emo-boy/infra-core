@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 
 
+## [0.2.0-beta.6](https://github.com/Last-emo-boy/infra-core/compare/v0.2.0-beta.4...v0.2.0-beta.6) (2025-09-27)
+
+
+### Bug Fixes
+
+* Add port validation and update exposed ports, no release ([93f8d83](https://github.com/Last-emo-boy/infra-core/commit/93f8d839589de457d296b6c06f47b73d5220f564))
+* Harden numeric parsing for counts in shell script, no release ([079d75b](https://github.com/Last-emo-boy/infra-core/commit/079d75b56bbc5eca465264b3c704667f5cc80a7a))
+
 ## [0.2.0-beta.5](https://github.com/Last-emo-boy/infra-core/compare/v0.2.0-beta.4...v0.2.0-beta.5) (2025-09-27)
 
 ## [0.2.0-beta.4](https://github.com/Last-emo-boy/infra-core/compare/v0.2.0-beta.3...v0.2.0-beta.4) (2025-09-27)
