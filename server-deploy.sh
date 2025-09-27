@@ -1748,7 +1748,9 @@ verify_deployment_health() {
     # Check log files for recent errors
     local error_count=0
     if [[ -f "$LOG_FILE" ]]; then
-        error_count=$(tail -20 "$LOG_FILE" | grep -i error | wc -l || echo "0")
+        error_count=$(tail -20 "$LOG_FILE" | grep -i error | wc -l 2>/dev/null | tr -d ' \n' || echo "0")
+        error_count=${error_count//[^0-9]/}
+        error_count=${error_count:-0}
     fi
     
     if [[ $error_count -eq 0 ]]; then
@@ -2869,7 +2871,9 @@ uninstall_infracore() {
     
     # Check backup directory
     if [[ -d "$BACKUP_DIR" ]]; then
-        local backup_count=$(find "$BACKUP_DIR" -name "*.tar.gz" 2>/dev/null | wc -l || echo "0")
+        local backup_count=$(find "$BACKUP_DIR" -name "*.tar.gz" 2>/dev/null | wc -l 2>/dev/null | tr -d ' \n' || echo "0")
+        backup_count=${backup_count//[^0-9]/}
+        backup_count=${backup_count:-0}
         local backup_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1 || echo "Unknown")
         if [[ $backup_count -gt 0 ]]; then
             log_info "  💾 Backups found: $backup_count files ($backup_size)"
@@ -3040,7 +3044,9 @@ perform_complete_uninstall() {
     
     # 5. Remove backups (with additional confirmation)
     if [[ -d "$BACKUP_DIR" ]]; then
-        local backup_count=$(find "$BACKUP_DIR" -name "*.tar.gz" 2>/dev/null | wc -l || echo "0")
+        local backup_count=$(find "$BACKUP_DIR" -name "*.tar.gz" 2>/dev/null | wc -l 2>/dev/null | tr -d ' \n' || echo "0")
+        backup_count=${backup_count//[^0-9]/}
+        backup_count=${backup_count:-0}
         if [[ $backup_count -gt 0 ]]; then
             log_warning "Found $backup_count backup files in $BACKUP_DIR"
             echo -n "Remove backup files too? [y/N]: "
@@ -3062,8 +3068,14 @@ perform_complete_uninstall() {
     
     if id "$SERVICE_USER" &>/dev/null; then
         # Check if user has other processes or files
-        local user_processes=$(ps -u "$SERVICE_USER" --no-headers 2>/dev/null | wc -l || echo "0")
-        local user_files=$(find / -user "$SERVICE_USER" -not -path "/proc/*" -not -path "/sys/*" 2>/dev/null | wc -l || echo "0")
+        local user_processes=$(ps -u "$SERVICE_USER" --no-headers 2>/dev/null | wc -l 2>/dev/null | tr -d ' \n' || echo "0")
+        local user_files=$(find / -user "$SERVICE_USER" -not -path "/proc/*" -not -path "/sys/*" 2>/dev/null | wc -l 2>/dev/null | tr -d ' \n' || echo "0")
+        
+        # Ensure variables are numeric
+        user_processes=${user_processes//[^0-9]/}
+        user_files=${user_files//[^0-9]/}
+        user_processes=${user_processes:-0}
+        user_files=${user_files:-0}
         
         if [[ $user_processes -gt 0 ]]; then
             log_warning "User $SERVICE_USER has running processes ($user_processes). Skipping user removal."
