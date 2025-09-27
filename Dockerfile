@@ -162,12 +162,23 @@ COPY --from=go-builder /app/bin/console /usr/local/bin/console
 # Copy frontend build
 COPY --from=node-builder /app/ui/dist /app/ui/dist
 
-# Copy configuration files to both locations for compatibility
+# Create additional config directories
+RUN mkdir -p /usr/local/etc/infra-core/configs
+
+# Copy configuration files to multiple locations for compatibility
 COPY configs/ /etc/infra-core/configs/
 COPY configs/ /app/configs/
+COPY configs/ /usr/local/etc/infra-core/configs/
 
 # Set working directory
 WORKDIR /app
+
+# Verify configuration files exist and are accessible
+RUN ls -la /app/configs/ && \
+    ls -la /etc/infra-core/configs/ && \
+    test -f /app/configs/production.yaml && \
+    test -f /app/configs/development.yaml && \
+    echo "✅ Configuration files verified"
 
 # Set environment variables
 ENV INFRA_CORE_ENV=production
@@ -272,12 +283,20 @@ RUN mkdir -p /var/lib/infra-core \
 COPY --from=go-builder /app/bin/* /usr/local/bin/
 COPY --from=node-builder /app/ui/dist /app/ui/dist
 
-# Copy configuration files to both locations
+# Create additional config directories and copy configuration files
+RUN mkdir -p /usr/local/etc/infra-core/configs
 COPY configs/ /etc/infra-core/configs/
 COPY configs/ /app/configs/
+COPY configs/ /usr/local/etc/infra-core/configs/
 
 # Set working directory
 WORKDIR /app
+
+# Verify configuration files exist
+RUN ls -la /app/configs/ && \
+    test -f /app/configs/production.yaml && \
+    test -f /app/configs/development.yaml && \
+    echo "✅ Configuration files verified in production-debug stage"
 
 # Set ownership
 RUN chown -R infracore:infracore /app

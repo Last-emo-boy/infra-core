@@ -13,6 +13,7 @@ services:
       - infra_data:/var/lib/infra-core
       - infra_logs:/var/log/infra-core
       - ./certs:/etc/infra-core/certs
+      - ./configs:/app/configs:ro  # Mount configs as read-only
       - /var/run/docker.sock:/var/run/docker.sock  # For container management
     environment:
       - INFRA_CORE_ENV=production

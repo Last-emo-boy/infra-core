@@ -437,6 +437,7 @@ Options:
     --update                Update to latest version without full deployment
     --non-interactive       Run in non-interactive mode with default values
     --configure             Run interactive configuration setup only
+    --validate-config       Validate and repair configuration files
     --upgrade               Interactive upgrade with confirmation prompt
     --uninstall             Completely uninstall InfraCore and cleanup all components
 
@@ -2144,8 +2145,274 @@ EOF
     
     log_success "Environment configuration completed"
     
+    # Validate configuration files
+    validate_configuration_files
+    
     # Show configuration summary
     show_config_summary
+}
+
+# Validate and ensure configuration files exist
+validate_configuration_files() {
+    log_step "📋 Validating configuration files..."
+    
+    local config_dir="$DEPLOY_DIR/current/configs"
+    local required_configs=("production.yaml" "development.yaml" "testing.yaml")
+    local missing_configs=()
+    
+    # Check if configs directory exists
+    if [[ ! -d "$config_dir" ]]; then
+        log_warning "Configuration directory not found: $config_dir"
+        log_info "Creating configuration directory..."
+        mkdir -p "$config_dir"
+    fi
+    
+    # Check each required configuration file
+    for config_file in "${required_configs[@]}"; do
+        local config_path="$config_dir/$config_file"
+        if [[ ! -f "$config_path" ]]; then
+            log_warning "Missing configuration file: $config_file"
+            missing_configs+=("$config_file")
+        else
+            log_info "✅ Found: $config_file"
+            # Validate YAML syntax
+            if command -v python3 >/dev/null 2>&1; then
+                if ! python3 -c "import yaml; yaml.safe_load(open('$config_path'))" 2>/dev/null; then
+                    log_warning "⚠️  YAML syntax error in: $config_file"
+                fi
+            fi
+        fi
+    done
+    
+    # Create missing configuration files from templates
+    if [[ ${#missing_configs[@]} -gt 0 ]]; then
+        log_info "Creating missing configuration files..."
+        create_default_config_files "${missing_configs[@]}"
+    fi
+    
+    # Ensure configuration files are accessible in Docker
+    ensure_docker_config_access
+    
+    log_success "Configuration validation completed"
+}
+
+# Create default configuration files
+create_default_config_files() {
+    local missing_configs=("$@")
+    local config_dir="$DEPLOY_DIR/current/configs"
+    
+    for config_file in "${missing_configs[@]}"; do
+        local config_path="$config_dir/$config_file"
+        log_info "Creating default configuration: $config_file"
+        
+        case "$config_file" in
+            "production.yaml")
+                create_production_config "$config_path"
+                ;;
+            "development.yaml")
+                create_development_config "$config_path"
+                ;;
+            "testing.yaml")
+                create_testing_config "$config_path"
+                ;;
+        esac
+        
+        if [[ -f "$config_path" ]]; then
+            log_success "Created: $config_file"
+            chmod 644 "$config_path"
+        else
+            log_error "Failed to create: $config_file"
+        fi
+    done
+}
+
+# Create production configuration
+create_production_config() {
+    local config_path="$1"
+    
+    cat > "$config_path" << EOF
+# Production Environment Configuration - Auto-generated $(date)
+gate:
+  host: "0.0.0.0"
+  ports:
+    http: ${CUSTOM_HTTP_PORT:-80}
+    https: ${CUSTOM_HTTPS_PORT:-443}
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/gate.log"
+  acme:
+    directory_url: "https://acme-v02.api.letsencrypt.org/directory"
+    email: "${CUSTOM_EMAIL:-admin@example.com}"
+    cache_dir: "/etc/infra-core/certs"
+    challenge_type: "http-01"
+    enabled: ${CUSTOM_SSL_ENABLED:-true}
+  resources:
+    memory_limit: "${CUSTOM_MEMORY_LIMIT:-2g}"
+    cpu_limit: "${CUSTOM_CPU_LIMIT:-2}"
+
+console:
+  host: "0.0.0.0"
+  port: ${CUSTOM_API_PORT:-8082}
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/console.log"
+  database:
+    path: "/var/lib/infra-core/console.db"
+    wal_mode: true
+    timeout: "30s"
+  auth:
+    jwt:
+      secret: ""  # Set via environment variable
+      expires_hours: 8
+    session:
+      timeout_minutes: 30
+  cors:
+    enabled: true
+    origins: ["https://${CUSTOM_DOMAIN:-localhost}", "http://localhost:3000"]
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    headers: ["Content-Type", "Authorization"]
+  backup:
+    enabled: ${CUSTOM_BACKUP_ENABLED:-true}
+    retention_days: ${CUSTOM_BACKUP_RETENTION:-30}
+    path: "/var/lib/infra-core/backups"
+EOF
+}
+
+# Create development configuration  
+create_development_config() {
+    local config_path="$1"
+    
+    cat > "$config_path" << EOF
+# Development Environment Configuration - Auto-generated $(date)
+gate:
+  host: "0.0.0.0"
+  ports:
+    http: ${CUSTOM_HTTP_PORT:-8080}
+    https: ${CUSTOM_HTTPS_PORT:-8443}
+  logs:
+    level: "debug"
+    console: true
+    file: "/var/log/infra-core/gate.log"
+  acme:
+    enabled: false  # Disabled in development
+
+console:
+  host: "0.0.0.0"
+  port: ${CUSTOM_API_PORT:-3000}
+  logs:
+    level: "debug"
+    console: true
+    file: "/var/log/infra-core/console.log"
+  database:
+    path: "/var/lib/infra-core/console-dev.db"
+    wal_mode: true
+    timeout: "30s"
+  auth:
+    jwt:
+      secret: "dev-secret-key"
+      expires_hours: 24
+    session:
+      timeout_minutes: 120
+  cors:
+    enabled: true
+    origins: ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"]
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    headers: ["Content-Type", "Authorization"]
+  backup:
+    enabled: false
+EOF
+}
+
+# Create testing configuration
+create_testing_config() {
+    local config_path="$1"
+    
+    cat > "$config_path" << EOF
+# Testing Environment Configuration - Auto-generated $(date)
+gate:
+  host: "127.0.0.1"
+  ports:
+    http: 18080
+    https: 18443
+  logs:
+    level: "debug"
+    console: true
+    file: "/tmp/infra-core-test/gate.log"
+  acme:
+    enabled: false
+
+console:
+  host: "127.0.0.1"
+  port: 18082
+  logs:
+    level: "debug"
+    console: true
+    file: "/tmp/infra-core-test/console.log"
+  database:
+    path: "/tmp/infra-core-test/console-test.db"
+    wal_mode: false
+    timeout: "5s"
+  auth:
+    jwt:
+      secret: "test-secret-key-do-not-use-in-production"
+      expires_hours: 1
+    session:
+      timeout_minutes: 30
+  cors:
+    enabled: true
+    origins: ["*"]
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    headers: ["Content-Type", "Authorization"]
+  backup:
+    enabled: false
+EOF
+}
+
+# Ensure Docker containers can access configuration files
+ensure_docker_config_access() {
+    log_info "🐳 Ensuring Docker configuration access..."
+    
+    local config_dir="$DEPLOY_DIR/current/configs"
+    
+    # Set proper permissions for configuration files
+    find "$config_dir" -name "*.yaml" -exec chmod 644 {} \;
+    find "$config_dir" -name "*.yml" -exec chmod 644 {} \;
+    
+    # Ensure directory is readable
+    chmod 755 "$config_dir"
+    
+    # Test Docker bind mount path
+    if [[ -f "$DEPLOY_DIR/current/docker-compose.yml" ]]; then
+        # Check if config mount is in docker-compose
+        if ! grep -q "./configs:/app/configs" "$DEPLOY_DIR/current/docker-compose.yml"; then
+            log_warning "Configuration mount not found in docker-compose.yml"
+            log_info "Adding configuration volume mount..."
+            add_config_mount_to_compose
+        else
+            log_success "Configuration mount verified in docker-compose.yml"
+        fi
+    fi
+    
+    log_success "Docker configuration access configured"
+}
+
+# Add configuration mount to docker-compose.yml
+add_config_mount_to_compose() {
+    local compose_file="$DEPLOY_DIR/current/docker-compose.yml"
+    local backup_file="$compose_file.backup-config-$(date +%Y%m%d-%H%M%S)"
+    
+    # Backup original file
+    cp "$compose_file" "$backup_file"
+    log_info "Backed up docker-compose.yml to: $backup_file"
+    
+    # Add configuration mount if not exists
+    if ! grep -q "./configs:/app/configs" "$compose_file"; then
+        # Find the volumes section and add config mount
+        sed -i '/- \.\/certs:\/etc\/infra-core\/certs/a\      - ./configs:/app/configs:ro  # Mount configs as read-only' "$compose_file"
+        log_success "Added configuration mount to docker-compose.yml"
+    fi
 }
 
 # Show configuration summary
@@ -2162,6 +2429,60 @@ show_config_summary() {
     echo "  💾 Backup Enabled: ${CUSTOM_BACKUP_ENABLED:-'true'}"
     [[ "${CUSTOM_BACKUP_ENABLED:-true}" == "true" ]] && echo "  📅 Backup Retention: ${CUSTOM_BACKUP_RETENTION:-'30'} days"
     echo "  🔑 JWT Secret: ${JWT_SECRET:+Set (hidden)} ${JWT_SECRET:-Not set}"
+}
+
+# Check configuration files using external tool or built-in validation
+check_configuration() {
+    log_info "🔍 Checking configuration files..."
+    
+    # Use config-check script if available
+    local config_check_script="./scripts/config-check.sh"
+    if [[ -f "$config_check_script" ]]; then
+        log_info "Using configuration check tool..."
+        chmod +x "$config_check_script"
+        if ! "$config_check_script" --check; then
+            log_warning "Configuration issues detected"
+            if [[ "$NON_INTERACTIVE" != "true" ]]; then
+                read -p "Fix configuration files automatically? (y/N): " -n 1 -r
+                echo
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    "$config_check_script" --fix
+                    "$config_check_script" --validate
+                    log_success "Configuration files fixed"
+                else
+                    log_warning "Proceeding with existing configuration"
+                fi
+            else
+                log_info "Running in non-interactive mode, auto-fixing configuration..."
+                "$config_check_script" --fix
+                "$config_check_script" --validate
+            fi
+        else
+            log_success "All configuration files are valid"
+        fi
+        
+        # Check Docker configuration mounts
+        if ! "$config_check_script" --docker-check; then
+            log_warning "Docker configuration mount issues detected"
+            if [[ "$NON_INTERACTIVE" != "true" ]]; then
+                read -p "Fix Docker configuration mounts? (y/N): " -n 1 -r
+                echo
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    "$config_check_script" --docker-fix
+                    log_success "Docker configuration mounts fixed"
+                fi
+            else
+                log_info "Running in non-interactive mode, auto-fixing Docker mounts..."
+                "$config_check_script" --docker-fix
+            fi
+        fi
+    else
+        # Fallback to built-in validation
+        log_info "Config check tool not found, using built-in validation..."
+        validate_configuration_files
+        create_default_config_files
+        ensure_docker_config_access
+    fi
 }
 
 # Install systemd services
@@ -2982,6 +3303,9 @@ main() {
     # Check root access
     check_root
     
+    # Check configuration files
+    check_configuration
+    
     # Welcome message for interactive deployments
     if [[ "$ACTION" == "deploy" && "$NON_INTERACTIVE" != "true" ]]; then
         echo
@@ -3025,6 +3349,13 @@ main() {
             setup_interactive_config
             log_success "Configuration completed successfully!"
             log_info "Run './server-deploy.sh --restart' to apply the new configuration"
+            ;;
+        "validate-config")
+            log_step "📋 Validating configuration files..."
+            cd "$DEPLOY_DIR/current" || { log_error "Deployment directory not found"; exit 1; }
+            validate_configuration_files
+            show_config_summary
+            log_success "Configuration validation completed!"
             ;;
         "test-mirrors")
             log_step "🧪 Testing mirror speeds..."
