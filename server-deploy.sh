@@ -158,6 +158,67 @@ error_handler() {
     exit $exit_code
 }
 
+# Enhanced error handling with rollback capability
+ROLLBACK_STEPS=()
+DEPLOYMENT_STARTED=false
+
+# Add step to rollback stack
+add_rollback_step() {
+    ROLLBACK_STEPS+=("$1")
+    log_info "Added rollback step: $1"
+}
+
+# Execute rollback steps in reverse order
+execute_rollback() {
+    if [[ ${#ROLLBACK_STEPS[@]} -eq 0 ]]; then
+        log_info "No rollback steps to execute"
+        return 0
+    fi
+    
+    log_warning "🔄 Executing rollback steps..."
+    for ((i=${#ROLLBACK_STEPS[@]}-1; i>=0; i--)); do
+        local step="${ROLLBACK_STEPS[i]}"
+        log_info "Rolling back: $step"
+        eval "$step" || log_error "Failed to rollback: $step"
+    done
+    ROLLBACK_STEPS=()
+    log_success "Rollback completed"
+}
+
+# Enhanced error handler with automatic rollback
+error_handler() {
+    local line_number=$1
+    local exit_code=$2
+    local command="${BASH_COMMAND}"
+    
+    log_error "❌ Deployment failed at line $line_number (exit code: $exit_code)"
+    log_error "Failed command: $command"
+    
+    # Auto-rollback on deployment failure
+    if [[ "$DEPLOYMENT_STARTED" == "true" ]]; then
+        log_warning "Deployment was in progress, initiating automatic rollback..."
+        execute_rollback
+    fi
+    
+    # Collect system information for debugging
+    {
+        echo "=== Error Context ==="
+        echo "Line: $line_number"
+        echo "Command: $command" 
+        echo "Exit Code: $exit_code"
+        echo "=== System Information ==="
+        uname -a
+        echo "=== Memory Usage ==="
+        free -h
+        echo "=== Disk Usage ==="
+        df -h
+        echo "=== Recent Logs ==="
+        tail -20 "$LOG_FILE" 2>/dev/null || echo "No log file available"
+    } | tee -a "$LOG_FILE" 2>/dev/null || true
+    
+    exit $exit_code
+}
+
 # Set up error trap
 trap 'error_handler ${LINENO} $?' ERR
 
@@ -1853,12 +1914,26 @@ deploy_binary() {
     # Install systemd services
     install_systemd_services
     
-    # Start services
-    systemctl daemon-reload
-    systemctl enable infra-core-console
-    systemctl enable infra-core-gate
-    systemctl restart infra-core-console
-    systemctl restart infra-core-gate
+    # Start services using systemd or start-services script
+    if command -v systemctl >/dev/null 2>&1; then
+        log_info "Starting services with systemd..."
+        systemctl daemon-reload
+        systemctl enable infra-core-console
+        systemctl enable infra-core-gate
+        systemctl restart infra-core-console
+        systemctl restart infra-core-gate
+    elif [[ -f "$DEPLOY_DIR/current/scripts/start-services.sh" ]]; then
+        log_info "Starting services with start-services script..."
+        chmod +x "$DEPLOY_DIR/current/scripts/start-services.sh"
+        cd "$DEPLOY_DIR/current"
+        
+        # Start in background for binary mode
+        nohup bash scripts/start-services.sh > "$LOG_DIR/services.log" 2>&1 &
+        echo $! > /tmp/infra-core-services.pid
+    else
+        log_error "No service management system available"
+        return 1
+    fi
     
     # Wait for services to be ready
     wait_for_services
@@ -2092,6 +2167,16 @@ setup_default_config() {
     apply_custom_config
 }
 
+# Check if port is available
+check_port_available() {
+    local port=$1
+    if netstat -tlnp 2>/dev/null | grep -q ":${port} "; then
+        return 1  # Port is in use
+    else
+        return 0  # Port is available
+    fi
+}
+
 # Update docker-compose ports
 update_docker_compose_ports() {
     local compose_file="$DEPLOY_DIR/current/docker-compose.yml"
@@ -2100,10 +2185,36 @@ update_docker_compose_ports() {
     if [[ -f "$compose_file" ]]; then
         cp "$compose_file" "$backup_compose"
         
-        # Update ports in docker-compose.yml
-        sed -i "s/\"80:80\"/\"$CUSTOM_HTTP_PORT:80\"/g" "$compose_file"
-        sed -i "s/\"443:443\"/\"$CUSTOM_HTTPS_PORT:443\"/g" "$compose_file"
-        sed -i "s/\"8082:8082\"/\"$CUSTOM_API_PORT:8082\"/g" "$compose_file"
+        # Check for port conflicts first
+        log_info "Checking for port conflicts..."
+        local ports_to_check=("$CUSTOM_HTTP_PORT" "$CUSTOM_HTTPS_PORT" "$CUSTOM_API_PORT")
+        local port_names=("HTTP" "HTTPS" "API")
+        local conflicts=()
+        
+        for i in "${!ports_to_check[@]}"; do
+            local port="${ports_to_check[$i]}"
+            local name="${port_names[$i]}"
+            if ! check_port_available "$port"; then
+                conflicts+=("${name}:${port}")
+                log_warning "${name} port ${port} is already in use"
+            fi
+        done
+        
+        if [[ ${#conflicts[@]} -gt 0 ]]; then
+            log_error "Port conflicts detected: ${conflicts[*]}"
+            log_info "Please stop the conflicting services or choose different ports"
+            log_info "To see what's using these ports: sudo netstat -tlnp | grep -E ':(${CUSTOM_HTTP_PORT}|${CUSTOM_HTTPS_PORT}|${CUSTOM_API_PORT})'"
+            return 1
+        fi
+        
+        # Update ports in docker-compose.yml (escape special characters)
+        local escaped_http_port=$(printf '%s\n' "$CUSTOM_HTTP_PORT" | sed 's/[[\.*^$()+?{|]/\\&/g')
+        local escaped_https_port=$(printf '%s\n' "$CUSTOM_HTTPS_PORT" | sed 's/[[\.*^$()+?{|]/\\&/g')
+        local escaped_api_port=$(printf '%s\n' "$CUSTOM_API_PORT" | sed 's/[[\.*^$()+?{|]/\\&/g')
+        
+        sed -i "s/\"80:80\"/\"${escaped_http_port}:80\"/g" "$compose_file"
+        sed -i "s/\"443:443\"/\"${escaped_https_port}:443\"/g" "$compose_file"
+        sed -i "s/\"8082:8082\"/\"${escaped_api_port}:8082\"/g" "$compose_file"
         
         # Add resource limits
         if ! grep -q "deploy:" "$compose_file"; then
@@ -2451,15 +2562,196 @@ show_config_summary() {
     echo "  🔑 JWT Secret: ${JWT_SECRET:+Set (hidden)} ${JWT_SECRET:-Not set}"
 }
 
+# Comprehensive pre-deployment checks
+pre_deployment_checks() {
+    log_step "🔍 Running pre-deployment checks..."
+    
+    local checks_passed=0
+    local total_checks=6
+    
+    # 1. Configuration files check
+    log_info "1/6 Checking configuration files..."
+    if check_configuration; then
+        checks_passed=$((checks_passed + 1))
+        log_success "✅ Configuration check passed"
+    else
+        log_error "❌ Configuration check failed"
+    fi
+    
+    # 2. Port availability check  
+    log_info "2/6 Checking port availability..."
+    if check_port_conflicts; then
+        checks_passed=$((checks_passed + 1))
+        log_success "✅ Port availability check passed"
+    else
+        log_error "❌ Port conflicts detected"
+    fi
+    
+    # 3. System resources check
+    log_info "3/6 Checking system resources..."
+    if validate_system_requirements; then
+        checks_passed=$((checks_passed + 1))
+        log_success "✅ System requirements check passed"
+    else
+        log_error "❌ System requirements check failed"
+    fi
+    
+    # 4. Dependencies check
+    log_info "4/6 Checking dependencies..."
+    if validate_dependencies; then
+        checks_passed=$((checks_passed + 1))
+        log_success "✅ Dependencies check passed"
+    else
+        log_error "❌ Dependencies check failed"
+    fi
+    
+    # 5. Network connectivity check
+    log_info "5/6 Checking network connectivity..."
+    if check_network_connectivity; then
+        checks_passed=$((checks_passed + 1))
+        log_success "✅ Network connectivity check passed"
+    else
+        log_warning "⚠️ Network connectivity check failed (non-critical)"
+    fi
+    
+    # 6. Existing deployment check
+    log_info "6/6 Checking existing deployment..."
+    if check_existing_deployment; then
+        checks_passed=$((checks_passed + 1))
+        log_success "✅ Existing deployment check passed"
+    else
+        log_warning "⚠️ Existing deployment issues detected"
+    fi
+    
+    # Summary
+    log_info "Pre-deployment checks completed: $checks_passed/$total_checks passed"
+    
+    if [[ $checks_passed -lt 4 ]]; then
+        log_error "Critical pre-deployment checks failed. Deployment cannot continue."
+        log_info "Please resolve the issues above and try again."
+        exit 1
+    elif [[ $checks_passed -lt $total_checks ]]; then
+        if [[ "$NON_INTERACTIVE" != "true" ]]; then
+            log_warning "Some checks failed. Continue with deployment? [y/N]"
+            read -r -n 1 continue_deploy
+            echo
+            if [[ ! "$continue_deploy" =~ ^[Yy]$ ]]; then
+                log_info "Deployment cancelled by user"
+                exit 0
+            fi
+        else
+            log_warning "Some checks failed, but continuing in non-interactive mode"
+        fi
+    fi
+    
+    log_success "Pre-deployment checks completed successfully"
+}
+
+# Check for port conflicts with fallback support
+check_port_conflicts() {
+    log_info "🔍 Checking port conflicts with automatic fallback..."
+    
+    local required_ports=("80" "443" "8082" "9090" "8085" "8086")
+    local conflicts=()
+    local fallback_info=()
+    
+    for port in "${required_ports[@]}"; do
+        if netstat -tlnp 2>/dev/null | grep -q ":${port} "; then
+            local process=$(netstat -tlnp 2>/dev/null | grep ":${port} " | awk '{print $7}' | head -1)
+            conflicts+=("${port}:${process}")
+            
+            # Add fallback information for optional services
+            case "$port" in
+                9090)
+                    fallback_info+=("Orchestrator will fallback to port 19090 or 29090")
+                    ;;
+                8085) 
+                    fallback_info+=("Probe Monitor will fallback to port 18085 or 28085")
+                    ;;
+                8086)
+                    fallback_info+=("Snap Service will fallback to port 18086 or 28086")
+                    ;;
+                80|443|8082)
+                    fallback_info+=("Critical service port $port - manual intervention may be needed")
+                    ;;
+            esac
+        fi
+    done
+    
+    if [[ ${#conflicts[@]} -gt 0 ]]; then
+        log_warning "Port conflicts detected:"
+        for conflict in "${conflicts[@]}"; do
+            log_warning "  Port ${conflict%:*} is used by ${conflict#*:}"
+        done
+        
+        if [[ ${#fallback_info[@]} -gt 0 ]]; then
+            log_info "Fallback configuration:"
+            for info in "${fallback_info[@]}"; do
+                log_info "  • $info"
+            done
+        fi
+        return 1
+    fi
+    
+    log_success "All ports are available"
+    return 0
+}
+
+# Check network connectivity
+check_network_connectivity() {
+    local test_urls=("github.com" "docker.io" "registry.npmjs.org")
+    local failed_count=0
+    
+    for url in "${test_urls[@]}"; do
+        if ! curl -s --max-time 5 "$url" >/dev/null 2>&1; then
+            log_warning "Cannot reach $url"
+            failed_count=$((failed_count + 1))
+        fi
+    done
+    
+    if [[ $failed_count -eq ${#test_urls[@]} ]]; then
+        log_error "No network connectivity detected"
+        return 1
+    elif [[ $failed_count -gt 0 ]]; then
+        log_warning "Some network connectivity issues detected"
+        return 0
+    fi
+    
+    return 0
+}
+
+# Check existing deployment state
+check_existing_deployment() {
+    if [[ -d "$DEPLOY_DIR/current" ]]; then
+        log_info "Found existing deployment at $DEPLOY_DIR/current"
+        
+        # Check if services are running
+        if command -v docker-compose >/dev/null 2>&1; then
+            local running_containers
+            running_containers=$(docker-compose -f "$DEPLOY_DIR/current/docker-compose.yml" ps -q 2>/dev/null | wc -l)
+            if [[ $running_containers -gt 0 ]]; then
+                log_info "Found $running_containers running containers"
+                add_rollback_step "cd '$DEPLOY_DIR/current' && docker-compose down"
+            fi
+        fi
+        
+        # Prepare backup rollback
+        add_rollback_step "mv '$DEPLOY_DIR/current' '$DEPLOY_DIR/rollback-$(date +%Y%m%d-%H%M%S)'"
+    fi
+    
+    return 0
+}
+
 # Check configuration files using external tool or built-in validation
 check_configuration() {
     log_info "🔍 Checking configuration files..."
     
     # Use config-check script if available
-    local config_check_script="./scripts/config-check.sh"
+    local config_check_script="$DEPLOY_DIR/current/scripts/config-check.sh"
     if [[ -f "$config_check_script" ]]; then
         log_info "Using configuration check tool..."
         chmod +x "$config_check_script"
+        cd "$DEPLOY_DIR/current"
         if ! "$config_check_script" --check; then
             log_warning "Configuration issues detected"
             if [[ "$NON_INTERACTIVE" != "true" ]]; then
@@ -2469,16 +2761,20 @@ check_configuration() {
                     "$config_check_script" --fix
                     "$config_check_script" --validate
                     log_success "Configuration files fixed"
+                    return 0
                 else
                     log_warning "Proceeding with existing configuration"
+                    return 1
                 fi
             else
                 log_info "Running in non-interactive mode, auto-fixing configuration..."
                 "$config_check_script" --fix
                 "$config_check_script" --validate
+                return 0
             fi
         else
             log_success "All configuration files are valid"
+            return 0
         fi
         
         # Check Docker configuration mounts
@@ -2490,10 +2786,12 @@ check_configuration() {
                 if [[ $REPLY =~ ^[Yy]$ ]]; then
                     "$config_check_script" --docker-fix
                     log_success "Docker configuration mounts fixed"
+                    return 0
                 fi
             else
                 log_info "Running in non-interactive mode, auto-fixing Docker mounts..."
                 "$config_check_script" --docker-fix
+                return 0
             fi
         fi
     else
@@ -2502,7 +2800,10 @@ check_configuration() {
         validate_configuration_files
         create_default_config_files
         ensure_docker_config_access
+        return 0
     fi
+    
+    return 1
 }
 
 # Install systemd services
@@ -3222,58 +3523,576 @@ perform_complete_uninstall() {
     log_info "Thank you for using InfraCore! 🚀"
 }
 
-# Main deployment function
+# Main deployment function with enhanced orchestration
 main_deploy() {
-    log_step "Starting InfraCore deployment..."
+    log_step "🚀 Starting InfraCore deployment..."
+    DEPLOYMENT_STARTED=true
+    DEPLOYMENT_START_TIME=$(date +%s)
+    DEPLOYMENT_ID="deploy-$(date +%s)-$$"
     
     # Set default deployment type
     DEPLOYMENT_TYPE=${DEPLOYMENT_TYPE:-"docker"}
     
-    log_info "Deployment configuration:"
-    log_info "  Repository: $REPO_URL"
-    log_info "  Branch: $BRANCH"
-    log_info "  Environment: $ENVIRONMENT"
-    log_info "  Deployment Type: $DEPLOYMENT_TYPE"
-    log_info "  Deploy Directory: $DEPLOY_DIR"
-    log_info "  Service User: $SERVICE_USER"
+    # Display deployment plan
+    show_deployment_plan
     
-    # Enhanced system validation
-    validate_system_requirements
-    validate_dependencies
+    # Run comprehensive pre-deployment checks
+    pre_deployment_checks
     
     # Install dependencies
+    monitor_deployment_progress "Installing dependencies"
     install_dependencies
+    add_rollback_step "log_info 'Dependencies rollback not implemented'"
     
     # Setup user and directories
+    monitor_deployment_progress "Setting up user and directories"
     setup_user
     setup_directories
+    add_rollback_step "userdel -f '$SERVICE_USER' 2>/dev/null || true"
     
     # Create backup if requested
-    create_backup
+    if [[ "$CREATE_BACKUP" == "true" ]]; then
+        monitor_deployment_progress "Creating backup"
+        create_backup
+    fi
     
     # Update repository
+    monitor_deployment_progress "Updating repository"
     update_repository
+    add_rollback_step "rm -rf '$DEPLOY_DIR/current'"
+    
+    # Set up script permissions
+    monitor_deployment_progress "Setting up script permissions"
+    setup_script_permissions
     
     # Deploy based on type
+    monitor_deployment_progress "Deploying application ($DEPLOYMENT_TYPE)"
     if [[ "$DEPLOYMENT_TYPE" == "docker" ]]; then
         deploy_docker
+        add_rollback_step "cd '$DEPLOY_DIR/current' && docker-compose down && docker system prune -f"
     else
         deploy_binary
+        add_rollback_step "systemctl stop infra-core-* 2>/dev/null || true"
     fi
     
     # Post-deployment validation
+    log_step "🏥 Running health checks..."
     if verify_deployment_health; then
+        DEPLOYMENT_STARTED=false  # Successful deployment, disable auto-rollback
         log_success "🎉 InfraCore deployment completed successfully and health check passed!"
         show_deployment_summary
+        
+        # Clear rollback steps on success
+        ROLLBACK_STEPS=()
     else
-        log_warning "Deployment completed but health check failed. Please review logs:"
-        log_info "  📋 Check status: sudo $0 --status"
-        log_info "  📝 View logs: sudo $0 --logs"
-        log_info "  🔧 Troubleshoot: sudo $0 --troubleshoot"
+        log_error "❌ Deployment failed health checks"
+        log_info "Initiating automatic rollback..."
+        execute_rollback
+        exit 1
     fi
+    
+    # Stop monitoring and generate reports
+    stop_resource_monitoring
+    
+    # Generate deployment metrics
+    generate_deployment_metrics
+    
+    # Perform post-deployment analysis
+    perform_post_deployment_analysis
+    
+    # Create status dashboard
+    create_deployment_status_dashboard
+    
+    # Cleanup temporary files
+    cleanup_deployment_temp_files
     
     # Show final status
     show_status
+}
+
+# Cleanup temporary files and resources
+cleanup_deployment_temp_files() {
+    log_step "🧹 Cleaning up temporary files..."
+    
+    # Remove temporary monitoring files
+    rm -f "/tmp/deployment-progress-$DEPLOYMENT_ID" 2>/dev/null || true
+    rm -f "/tmp/monitoring-$DEPLOYMENT_ID.pid" 2>/dev/null || true
+    rm -f "/tmp/deployment-resources-$DEPLOYMENT_ID.log" 2>/dev/null || true
+    
+    # Archive deployment logs if they exist
+    if [[ -f "$LOG_FILE" ]]; then
+        mkdir -p "$DEPLOY_DIR/logs" 2>/dev/null || true
+        cp "$LOG_FILE" "$DEPLOY_DIR/logs/deployment-$DEPLOYMENT_ID.log" 2>/dev/null || true
+    fi
+    
+    log_info "✅ Cleanup completed"
+}
+
+# Set up permissions for all scripts
+setup_script_permissions() {
+    log_info "🔐 Setting up script permissions..."
+    
+    local scripts_dir="$DEPLOY_DIR/current/scripts"
+    
+    if [[ -d "$scripts_dir" ]]; then
+        # Make all shell scripts executable
+        find "$scripts_dir" -name "*.sh" -type f -exec chmod +x {} \;
+        
+        # Set proper ownership
+        chown -R "$SERVICE_USER:$SERVICE_USER" "$scripts_dir" 2>/dev/null || true
+        
+        log_success "Script permissions configured"
+        
+        # Log available scripts
+        log_info "Available scripts:"
+        for script in "$scripts_dir"/*.sh; do
+            if [[ -f "$script" ]]; then
+                local script_name=$(basename "$script")
+                log_info "  ✅ $script_name"
+            fi
+        done
+    else
+        log_warning "Scripts directory not found: $scripts_dir"
+    fi
+}
+
+# Generate deployment metrics and report
+generate_deployment_metrics() {
+    local metrics_file="$DEPLOY_DIR/deployment-metrics.json"
+    local deployment_end_time=$(date +%s)
+    local deployment_duration=$((deployment_end_time - DEPLOYMENT_START_TIME))
+    
+    cat > "$metrics_file" <<EOF
+{
+    "deployment_id": "$DEPLOYMENT_ID",
+    "timestamp": "$(date -Iseconds)",
+    "duration_seconds": $deployment_duration,
+    "environment": "$ENVIRONMENT",
+    "deployment_type": "$DEPLOYMENT_TYPE",
+    "repository": "$REPO_URL",
+    "branch": "$BRANCH",
+    "deploy_directory": "$DEPLOY_DIR",
+    "service_user": "$SERVICE_USER",
+    "backup_created": ${CREATE_BACKUP:-false},
+    "rollback_steps": ${#ROLLBACK_STEPS[@]},
+    "success": true,
+    "health_check_passed": true,
+    "system_info": {
+        "hostname": "$(hostname)",
+        "os": "$(uname -s)",
+        "kernel": "$(uname -r)",
+        "architecture": "$(uname -m)",
+        "cpu_cores": $(nproc),
+        "memory_gb": $(free -g | awk '/^Mem:/{print $2}'),
+        "disk_usage": "$(df -h $DEPLOY_DIR | tail -1 | awk '{print $5}')"
+    }
+}
+EOF
+    
+    log_info "📊 Deployment metrics saved to: $metrics_file"
+    log_info "⏱️  Total deployment time: $(format_duration $deployment_duration)"
+}
+
+# Format duration in human readable format
+format_duration() {
+    local seconds=$1
+    local minutes=$((seconds / 60))
+    local remaining_seconds=$((seconds % 60))
+    
+    if [[ $minutes -gt 0 ]]; then
+        echo "${minutes}m ${remaining_seconds}s"
+    else
+        echo "${seconds}s"
+    fi
+}
+
+# Show deployment plan to user
+show_deployment_plan() {
+    echo
+    log_info "📋 Deployment Plan:"
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "  🎯 Target: $REPO_URL ($BRANCH)"
+    log_info "  📁 Directory: $DEPLOY_DIR"
+    log_info "  🏷️  Environment: $ENVIRONMENT"
+    log_info "  🚀 Type: $DEPLOYMENT_TYPE"
+    log_info "  👤 User: $SERVICE_USER"
+    log_info "  � Backup: $([ "$CREATE_BACKUP" == "true" ] && echo "✅ Enabled" || echo "❌ Disabled")"
+    log_info "  🌐 Mirrors: $([ "$USE_MIRRORS" == "true" ] && echo "✅ Enabled ($MIRROR_REGION)" || echo "❌ Disabled")"
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    if [[ "$NON_INTERACTIVE" != "true" ]]; then
+        echo
+        read -p "Continue with this deployment plan? [Y/n]: " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Nn]$ ]]; then
+            log_info "Deployment cancelled by user"
+            exit 0
+        fi
+    fi
+}
+
+# Real-time deployment monitoring
+monitor_deployment_progress() {
+    local step_name="$1"
+    local progress_file="/tmp/deployment-progress-$DEPLOYMENT_ID"
+    
+    echo "$(date -Iseconds): Starting $step_name" >> "$progress_file"
+    log_info "📊 Progress: $step_name"
+    
+    # Start resource monitoring in background
+    if [[ ! -f "/tmp/monitoring-$DEPLOYMENT_ID.pid" ]]; then
+        start_resource_monitoring &
+        echo $! > "/tmp/monitoring-$DEPLOYMENT_ID.pid"
+    fi
+}
+
+# Start resource monitoring
+start_resource_monitoring() {
+    local monitoring_file="/tmp/deployment-resources-$DEPLOYMENT_ID.log"
+    
+    while [[ -f "/tmp/monitoring-$DEPLOYMENT_ID.pid" ]]; do
+        {
+            echo "$(date -Iseconds),$(uptime | awk -F'load average:' '{print $2}' | awk '{print $1}' | tr -d ','),$(free | grep Mem | awk '{printf "%.1f", $3/$2 * 100.0}'),$(df "$DEPLOY_DIR" | tail -1 | awk '{print $(NF-1)}' | sed 's/%//')"
+        } >> "$monitoring_file" 2>/dev/null
+        sleep 5
+    done
+}
+
+# Stop resource monitoring
+stop_resource_monitoring() {
+    local pid_file="/tmp/monitoring-$DEPLOYMENT_ID.pid"
+    if [[ -f "$pid_file" ]]; then
+        local pid=$(cat "$pid_file")
+        kill "$pid" 2>/dev/null || true
+        rm -f "$pid_file"
+        
+        # Generate resource usage report
+        generate_resource_report
+    fi
+}
+
+# Generate resource usage report
+generate_resource_report() {
+    local monitoring_file="/tmp/deployment-resources-$DEPLOYMENT_ID.log"
+    local report_file="$DEPLOY_DIR/deployment-resource-report.txt"
+    
+    if [[ -f "$monitoring_file" ]]; then
+        {
+            echo "Resource Usage During Deployment"
+            echo "================================"
+            echo "Deployment ID: $DEPLOYMENT_ID"
+            echo "Timestamp: $(date)"
+            echo ""
+            echo "Load Average (1min), Memory Usage (%), Disk Usage (%)"
+            echo "----------------------------------------------------"
+            cat "$monitoring_file"
+        } > "$report_file"
+        
+        log_info "📈 Resource usage report saved to: $report_file"
+        rm -f "$monitoring_file"
+    fi
+}
+
+# Performance analysis after deployment
+perform_post_deployment_analysis() {
+    log_step "📊 Performing post-deployment analysis..."
+    
+    local analysis_file="$DEPLOY_DIR/post-deployment-analysis.json"
+    local current_time=$(date -Iseconds)
+    
+    # Collect system metrics
+    local cpu_info=$(lscpu | grep "CPU(s):" | head -1 | awk '{print $2}')
+    local memory_total=$(free -m | grep Mem | awk '{print $2}')
+    local memory_used=$(free -m | grep Mem | awk '{print $3}')
+    local disk_total=$(df -h "$DEPLOY_DIR" | tail -1 | awk '{print $2}')
+    local disk_used=$(df -h "$DEPLOY_DIR" | tail -1 | awk '{print $3}')
+    local load_avg=$(uptime | awk -F'load average:' '{print $2}' | xargs)
+    
+    # Docker specific metrics
+    local container_count=0
+    local image_count=0
+    if command -v docker >/dev/null 2>&1; then
+        container_count=$(docker ps -q | wc -l)
+        image_count=$(docker images -q | wc -l)
+    fi
+    
+    # Generate analysis report
+    cat > "$analysis_file" <<EOF
+{
+    "analysis_timestamp": "$current_time",
+    "deployment_id": "$DEPLOYMENT_ID",
+    "system_metrics": {
+        "cpu_cores": $cpu_info,
+        "memory_total_mb": $memory_total,
+        "memory_used_mb": $memory_used,
+        "memory_usage_percent": $(echo "scale=2; $memory_used * 100 / $memory_total" | bc -l),
+        "disk_total": "$disk_total",
+        "disk_used": "$disk_used",
+        "load_average": "$load_avg"
+    },
+    "docker_metrics": {
+        "running_containers": $container_count,
+        "total_images": $image_count
+    },
+    "deployment_health": "$(verify_deployment_health >/dev/null 2>&1 && echo "healthy" || echo "unhealthy")",
+    "recommendations": $(generate_optimization_recommendations)
+}
+EOF
+    
+    log_info "📊 Post-deployment analysis saved to: $analysis_file"
+    display_analysis_summary "$analysis_file"
+}
+
+# Generate optimization recommendations
+generate_optimization_recommendations() {
+    local recommendations='[]'
+    
+    # Check memory usage
+    local memory_usage=$(free | awk 'NR==2{printf "%.0f", $3*100/$2}')
+    if [[ $memory_usage -gt 80 ]]; then
+        recommendations=$(echo "$recommendations" | jq '. += ["Consider adding more memory or optimizing memory usage"]')
+    fi
+    
+    # Check disk usage
+    local disk_usage=$(df "$DEPLOY_DIR" | tail -1 | awk '{print $(NF-1)}' | sed 's/%//')
+    if [[ $disk_usage -gt 85 ]]; then
+        recommendations=$(echo "$recommendations" | jq '. += ["Consider cleaning up old deployments or expanding disk space"]')
+    fi
+    
+    # Check CPU load
+    local load_avg=$(uptime | awk -F'load average:' '{print $2}' | awk '{print $1}' | tr -d ',')
+    local cpu_cores=$(nproc)
+    if (( $(echo "$load_avg > $cpu_cores" | bc -l) )); then
+        recommendations=$(echo "$recommendations" | jq '. += ["High CPU load detected, consider optimizing or adding more CPU cores"]')
+    fi
+    
+    echo "$recommendations"
+}
+
+# Display analysis summary
+display_analysis_summary() {
+    local analysis_file="$1"
+    
+    if [[ -f "$analysis_file" ]] && command -v jq >/dev/null 2>&1; then
+        echo
+        log_info "📊 Post-Deployment Analysis Summary:"
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        local memory_usage=$(jq -r '.system_metrics.memory_usage_percent' "$analysis_file")
+        local container_count=$(jq -r '.docker_metrics.running_containers' "$analysis_file")
+        local health=$(jq -r '.deployment_health' "$analysis_file")
+        
+        log_info "  💾 Memory Usage: ${memory_usage}%"
+        log_info "  🐳 Running Containers: $container_count"
+        log_info "  🏥 Health Status: $health"
+        
+        local recommendations=$(jq -r '.recommendations[]' "$analysis_file" 2>/dev/null)
+        if [[ -n "$recommendations" ]]; then
+            log_info "  💡 Recommendations:"
+            echo "$recommendations" | while IFS= read -r rec; do
+                log_info "    • $rec"
+            done
+        else
+            log_info "  ✅ No optimization recommendations at this time"
+        fi
+        
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    fi
+}
+
+# Create deployment status dashboard
+create_deployment_status_dashboard() {
+    local dashboard_file="$DEPLOY_DIR/deployment-status.html"
+    
+    cat > "$dashboard_file" <<'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InfraCore Deployment Status</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; }
+        .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .status-card { background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #28a745; }
+        .status-card.warning { border-left-color: #ffc107; }
+        .status-card.error { border-left-color: #dc3545; }
+        .metric { margin: 10px 0; }
+        .metric-label { font-weight: bold; color: #495057; }
+        .metric-value { color: #007bff; }
+        .refresh-btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+    </style>
+    <script>
+        function refreshStatus() {
+            location.reload();
+        }
+        setInterval(refreshStatus, 30000); // Auto-refresh every 30 seconds
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 InfraCore Deployment Status</h1>
+            <button class="refresh-btn" onclick="refreshStatus()">Refresh Status</button>
+            <p>Last Updated: <span id="timestamp">TIMESTAMP_PLACEHOLDER</span></p>
+        </div>
+        
+        <div class="status-grid">
+            <div class="status-card">
+                <h3>📊 System Metrics</h3>
+                <div class="metric">
+                    <span class="metric-label">CPU Usage:</span>
+                    <span class="metric-value">CPU_USAGE_PLACEHOLDER</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Memory Usage:</span>
+                    <span class="metric-value">MEMORY_USAGE_PLACEHOLDER</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Disk Usage:</span>
+                    <span class="metric-value">DISK_USAGE_PLACEHOLDER</span>
+                </div>
+            </div>
+            
+            <div class="status-card">
+                <h3>🐳 Docker Status</h3>
+                <div class="metric">
+                    <span class="metric-label">Running Containers:</span>
+                    <span class="metric-value">CONTAINER_COUNT_PLACEHOLDER</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Docker Images:</span>
+                    <span class="metric-value">IMAGE_COUNT_PLACEHOLDER</span>
+                </div>
+            </div>
+            
+            <div class="status-card">
+                <h3>🌐 Service Endpoints</h3>
+                <div class="metric">
+                    <span class="metric-label">Main Service:</span>
+                    <span class="metric-value">SERVICE_STATUS_PLACEHOLDER</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Health Check:</span>
+                    <span class="metric-value">HEALTH_STATUS_PLACEHOLDER</span>
+                </div>
+            </div>
+            
+            <div class="status-card">
+                <h3>📈 Deployment Info</h3>
+                <div class="metric">
+                    <span class="metric-label">Deployment ID:</span>
+                    <span class="metric-value">DEPLOYMENT_ID_PLACEHOLDER</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Environment:</span>
+                    <span class="metric-value">ENVIRONMENT_PLACEHOLDER</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Deploy Time:</span>
+                    <span class="metric-value">DEPLOY_TIME_PLACEHOLDER</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+EOF
+    
+    # Update placeholders with actual values
+    local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1 | cut -d',' -f1 | xargs)
+    local memory_usage=$(free | grep Mem | awk '{printf("%.1f", $3/$2 * 100.0)}')
+    local disk_usage=$(df "$DEPLOY_DIR" | tail -1 | awk '{print $(NF-1)}')
+    local container_count=$(docker ps -q 2>/dev/null | wc -l || echo "N/A")
+    local image_count=$(docker images -q 2>/dev/null | wc -l || echo "N/A")
+    
+    sed -i "s/TIMESTAMP_PLACEHOLDER/$(date)/" "$dashboard_file"
+    sed -i "s/CPU_USAGE_PLACEHOLDER/${cpu_usage}%/" "$dashboard_file"
+    sed -i "s/MEMORY_USAGE_PLACEHOLDER/${memory_usage}%/" "$dashboard_file"
+    sed -i "s/DISK_USAGE_PLACEHOLDER/${disk_usage}/" "$dashboard_file"
+    sed -i "s/CONTAINER_COUNT_PLACEHOLDER/$container_count/" "$dashboard_file"
+    sed -i "s/IMAGE_COUNT_PLACEHOLDER/$image_count/" "$dashboard_file"
+    sed -i "s/SERVICE_STATUS_PLACEHOLDER/$(verify_deployment_health >/dev/null 2>&1 && echo "🟢 Running" || echo "🔴 Issues")/" "$dashboard_file"
+    sed -i "s/HEALTH_STATUS_PLACEHOLDER/$(verify_deployment_health >/dev/null 2>&1 && echo "✅ Healthy" || echo "⚠️ Unhealthy")/" "$dashboard_file"
+    sed -i "s/DEPLOYMENT_ID_PLACEHOLDER/$DEPLOYMENT_ID/" "$dashboard_file"
+    sed -i "s/ENVIRONMENT_PLACEHOLDER/$ENVIRONMENT/" "$dashboard_file"
+    sed -i "s/DEPLOY_TIME_PLACEHOLDER/$(format_duration $(($(date +%s) - DEPLOYMENT_START_TIME)))/" "$dashboard_file"
+    
+    log_info "📊 Status dashboard created: $dashboard_file"
+    
+    # Also create a simple status endpoint
+    if command -v python3 >/dev/null 2>&1; then
+        create_status_api_endpoint
+    fi
+}
+
+# Create a simple status API endpoint
+create_status_api_endpoint() {
+    local api_script="$DEPLOY_DIR/status-api.py"
+    
+    cat > "$api_script" <<'EOF'
+#!/usr/bin/env python3
+import json
+import subprocess
+import http.server
+import socketserver
+from datetime import datetime
+
+def get_system_status():
+    try:
+        # Get system metrics
+        cpu_result = subprocess.run(['top', '-bn1'], capture_output=True, text=True)
+        cpu_usage = "N/A"
+        for line in cpu_result.stdout.split('\n'):
+            if 'Cpu(s)' in line:
+                cpu_usage = line.split('%')[0].split()[-1]
+                break
+        
+        memory_result = subprocess.run(['free'], capture_output=True, text=True)
+        memory_lines = memory_result.stdout.split('\n')[1].split()
+        memory_usage = round(int(memory_lines[2]) / int(memory_lines[1]) * 100, 1)
+        
+        # Get Docker status
+        docker_ps = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True)
+        container_count = len([l for l in docker_ps.stdout.strip().split('\n') if l])
+        
+        return {
+            'timestamp': datetime.now().isoformat(),
+            'cpu_usage': f"{cpu_usage}%",
+            'memory_usage': f"{memory_usage}%",
+            'running_containers': container_count,
+            'status': 'healthy'
+        }
+    except Exception as e:
+        return {
+            'timestamp': datetime.now().isoformat(),
+            'error': str(e),
+            'status': 'error'
+        }
+
+class StatusHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/status':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            status = get_system_status()
+            self.wfile.write(json.dumps(status).encode())
+        else:
+            super().do_GET()
+
+if __name__ == "__main__":
+    PORT = 8087
+    with socketserver.TCPServer(("", PORT), StatusHandler) as httpd:
+        print(f"Status API server running on port {PORT}")
+        httpd.serve_forever()
+EOF
+    
+    chmod +x "$api_script"
+    log_info "🔗 Status API created: $api_script (run with python3 to start)"
 }
 
 # Show deployment completion summary
@@ -3394,31 +4213,31 @@ main() {
             ;;
         "test-install")
             log_step "✅ Running installation verification tests..."
-            if [[ -f "scripts/test-installation.sh" ]]; then
-                chmod +x scripts/test-installation.sh
-                bash scripts/test-installation.sh
+            if [[ -f "$DEPLOY_DIR/current/scripts/test-installation.sh" ]]; then
+                chmod +x "$DEPLOY_DIR/current/scripts/test-installation.sh"
+                cd "$DEPLOY_DIR/current" && bash scripts/test-installation.sh
             else
-                log_error "Test script not found: scripts/test-installation.sh"
+                log_error "Test script not found: $DEPLOY_DIR/current/scripts/test-installation.sh"
                 exit 1
             fi
             ;;
         "test-api")
             log_step "🧪 Running API functionality tests..."
-            if [[ -f "scripts/test-api.sh" ]]; then
-                chmod +x scripts/test-api.sh
-                bash scripts/test-api.sh
+            if [[ -f "$DEPLOY_DIR/current/scripts/test-api.sh" ]]; then
+                chmod +x "$DEPLOY_DIR/current/scripts/test-api.sh"
+                cd "$DEPLOY_DIR/current" && bash scripts/test-api.sh
             else
-                log_error "Test script not found: scripts/test-api.sh"
+                log_error "Test script not found: $DEPLOY_DIR/current/scripts/test-api.sh"
                 exit 1
             fi
             ;;
         "troubleshoot")
             log_step "🔧 Running troubleshooting diagnostics..."
-            if [[ -f "scripts/troubleshoot.sh" ]]; then
-                chmod +x scripts/troubleshoot.sh
-                bash scripts/troubleshoot.sh
+            if [[ -f "$DEPLOY_DIR/current/scripts/troubleshoot.sh" ]]; then
+                chmod +x "$DEPLOY_DIR/current/scripts/troubleshoot.sh"
+                cd "$DEPLOY_DIR/current" && bash scripts/troubleshoot.sh
             else
-                log_error "Troubleshoot script not found: scripts/troubleshoot.sh"
+                log_error "Troubleshoot script not found: $DEPLOY_DIR/current/scripts/troubleshoot.sh"
                 exit 1
             fi
             ;;

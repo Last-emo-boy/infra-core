@@ -85,18 +85,57 @@ RUN set -eux; \
 # Copy source code
 COPY . .
 
-# Build applications (CGO disabled for pure Go builds, fully static binaries)
+# Build all applications (CGO disabled for pure Go builds, fully static binaries)
 RUN set -eux; \
+    echo "Building Gate service..."; \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -a -installsuffix cgo \
     -ldflags='-w -s -extldflags "-static"' \
     -o bin/gate cmd/gate/main.go
 
 RUN set -eux; \
+    echo "Building Console service..."; \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -a -installsuffix cgo \
     -ldflags='-w -s -extldflags "-static"' \
     -o bin/console cmd/console/main.go
+
+# Build optional services (if source exists)
+RUN set -eux; \
+    if [ -f "cmd/orch/main.go" ]; then \
+        echo "Building Orchestrator service..."; \
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+        -a -installsuffix cgo \
+        -ldflags='-w -s -extldflags "-static"' \
+        -o bin/orchestrator cmd/orch/main.go; \
+    else \
+        echo "Orchestrator source not found, skipping..."; \
+    fi
+
+RUN set -eux; \
+    if [ -f "cmd/probe/main.go" ]; then \
+        echo "Building Probe Monitor service..."; \
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+        -a -installsuffix cgo \
+        -ldflags='-w -s -extldflags "-static"' \
+        -o bin/probe cmd/probe/main.go; \
+    else \
+        echo "Probe Monitor source not found, skipping..."; \
+    fi
+
+RUN set -eux; \
+    if [ -f "cmd/snap/main.go" ]; then \
+        echo "Building Snap service..."; \
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+        -a -installsuffix cgo \
+        -ldflags='-w -s -extldflags "-static"' \
+        -o bin/snap cmd/snap/main.go; \
+    else \
+        echo "Snap service source not found, skipping..."; \
+    fi
+
+# List built binaries
+RUN ls -la bin/
 
 # Build stage for Node.js frontend
 FROM node:20-alpine AS node-builder

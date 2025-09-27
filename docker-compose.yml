@@ -11,9 +11,10 @@ services:
       - "80:80"        # Gate HTTP
       - "443:443"      # Gate HTTPS  
       - "8082:8082"    # Console API
-      - "9090:9090"    # Orchestrator
-      - "8085:8085"    # Probe Monitor
-      - "8086:8086"    # Snap Service
+      # All services enabled with fallback ports
+      - "${ORCHESTRATOR_PORT:-9090}:9090"    # Orchestrator (fallback: 19090)
+      - "${PROBE_PORT:-8085}:8085"           # Probe Monitor (fallback: 18085)
+      - "${SNAP_PORT:-8086}:8086"            # Snap Service (fallback: 18086)
     volumes:
       - infra_data:/var/lib/infra-core
       - infra_logs:/var/log/infra-core
@@ -24,6 +25,14 @@ services:
       - INFRA_CORE_ENV=production
       - INFRA_CORE_JWT_SECRET=${JWT_SECRET:-}
       - INFRA_CORE_ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+      # Service control - set to "true" to enable optional services
+      - ENABLE_ORCHESTRATOR=${ENABLE_ORCHESTRATOR:-true}
+      - ENABLE_PROBE_MONITOR=${ENABLE_PROBE_MONITOR:-true} 
+      - ENABLE_SNAP_SERVICE=${ENABLE_SNAP_SERVICE:-true}
+      # Service port configuration
+      - INFRA_CORE_ORCH_PORT=${ORCHESTRATOR_PORT:-9090}
+      - INFRA_CORE_PROBE_PORT=${PROBE_PORT:-8085}
+      - INFRA_CORE_SNAP_PORT=${SNAP_PORT:-8086}
     networks:
       - infra-network
     depends_on:
