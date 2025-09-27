@@ -289,6 +289,10 @@ COPY configs/ /etc/infra-core/configs/
 COPY configs/ /app/configs/
 COPY configs/ /usr/local/etc/infra-core/configs/
 
+# Copy startup script
+COPY scripts/start-services.sh /usr/local/bin/start-services.sh
+RUN chmod +x /usr/local/bin/start-services.sh
+
 # Set working directory
 WORKDIR /app
 
@@ -316,5 +320,5 @@ EXPOSE 80 443 8082
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8082/api/v1/health || exit 1
 
-# Default command runs console
-CMD ["console"]
+# Default command runs all services
+CMD ["/usr/local/bin/start-services.sh"]

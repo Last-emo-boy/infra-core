@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   infra-core:
-    build: .
+    build: 
+      context: .
+      target: production-debug
     container_name: infra-core
     restart: unless-stopped
     ports:
