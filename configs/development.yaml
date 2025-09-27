@@ -59,7 +59,12 @@ probe:
   max_concurrent_probes: 10
 
 snap:
+  host: "localhost"
   port: 8086
+  logs:
+    level: "debug"
+    console: true
+    file: "./log/snap-dev.log"
   repo_dir: "./data/snapshots"
   temp_dir: "./tmp/snap"
   max_parallel: 4

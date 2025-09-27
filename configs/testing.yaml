@@ -37,3 +37,57 @@ console:
     origins: ["http://localhost:3001"]
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     headers: ["Content-Type", "Authorization"]
+
+orchestrator:
+  host: "localhost"
+  port: 18090
+  logs:
+    level: "warn"
+    console: true
+    file: "./log/orchestrator-test.log"
+  node_name: "test-node"
+  cluster_mode: false
+  health_check_interval: "10s"
+  resource_monitoring: false
+  default_replicas: 1
+  max_deployments: 10
+  enable_metrics: false
+  workers:
+    max: 2
+    timeout: "10s"
+  queue:
+    size: 100
+    timeout: "1m"
+
+probe:
+  host: "localhost"
+  port: 18085
+  logs:
+    level: "warn"
+    console: true
+    file: "./log/probe-test.log"
+  check_interval: "5s"
+  alert_interval: "10s"
+  cleanup_interval: "1h"
+  result_retention: "1h"
+  alert_retention: "24h"
+  enable_notifications: false
+  max_concurrent_probes: 5
+
+snap:
+  host: "localhost"
+  port: 18086
+  logs:
+    level: "warn"
+    console: true
+    file: "./log/snap-test.log"
+  repo_dir: "./test-data/snapshots"
+  temp_dir: "./tmp/test-snap"
+  max_parallel: 2
+  rate_limit: "5MB/s"
+  scrub_interval: "1h"
+  default_retention:
+    daily: 1
+    weekly: 0
+    monthly: 0
+    yearly: 0

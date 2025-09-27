@@ -37,3 +37,50 @@ console:
     origins: ["https://console.last-emo-boy.com"]
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     headers: ["Content-Type", "Authorization"]
+
+orchestrator:
+  host: "0.0.0.0"
+  port: 9090
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/orchestrator.log"
+  node_name: "production-node"
+  cluster_mode: true
+  health_check_interval: "30s"
+  resource_monitoring: true
+  default_replicas: 3
+  max_deployments: 100
+  enable_metrics: true
+
+probe:
+  host: "0.0.0.0"
+  port: 8085
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/probe.log"
+  check_interval: "30s"
+  alert_interval: "5m"
+  cleanup_interval: "24h"
+  result_retention: "7d"
+  alert_retention: "30d"
+  enable_notifications: true
+  max_concurrent_probes: 50
+
+snap:
+  host: "0.0.0.0"
+  port: 8086
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/snap.log"
+  repo_dir: "/var/lib/infra-core/snapshots"
+  temp_dir: "/tmp/infra-core/snap"
+  max_parallel: 8
+  rate_limit: "50MB/s"
+  scrub_interval: "24h"
+  default_retention:
+    daily: 7
+    weekly: 4
+    monthly: 12
