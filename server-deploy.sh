@@ -728,22 +728,111 @@ install_dependencies() {
             # Install Docker if not present
             if ! command -v docker &> /dev/null; then
                 log_info "Installing Docker..."
-                # Add Docker GPG key and repository
+                # Add Docker GPG key and repository with enhanced error handling
                 apt-get install -y ca-certificates curl gnupg lsb-release
                 mkdir -p /etc/apt/keyrings
-                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-                apt-get update
-                apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-                systemctl enable docker
-                systemctl start docker
+                
+                # Remove any existing Docker GPG key and repository
+                rm -f /etc/apt/keyrings/docker.gpg
+                rm -f /etc/apt/sources.list.d/docker.list
+                
+                # Try to get the Docker GPG key with multiple methods
+                log_info "Adding Docker GPG key..."
+                local gpg_success=false
+                
+                # Method 1: Try the official Docker GPG key
+                if curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null; then
+                    gpg_success=true
+                    log_success "Docker GPG key added successfully"
+                else
+                    log_warning "Failed to add Docker GPG key via method 1, trying alternative..."
+                    
+                    # Method 2: Try with explicit keyserver
+                    if gpg --keyserver keyserver.ubuntu.com --recv-keys 7EA0A9C3F273FCD8 2>/dev/null && 
+                       gpg --export 7EA0A9C3F273FCD8 | gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null; then
+                        gpg_success=true
+                        log_success "Docker GPG key added via keyserver"
+                    else
+                        log_warning "Failed to add Docker GPG key via keyserver, trying wget..."
+                        
+                        # Method 3: Try with wget as fallback
+                        if wget -qO- https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null; then
+                            gpg_success=true
+                            log_success "Docker GPG key added via wget"
+                        fi
+                    fi
+                fi
+                
+                if [[ "$gpg_success" == "true" ]]; then
+                    # Set proper permissions
+                    chmod 644 /etc/apt/keyrings/docker.gpg
+                    
+                    # Add Docker repository
+                    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+                    
+                    # Update package list with retry
+                    log_info "Updating package list..."
+                    local update_success=false
+                    for attempt in {1..3}; do
+                        if apt-get update 2>/dev/null; then
+                            update_success=true
+                            break
+                        else
+                            log_warning "Package update attempt $attempt failed, retrying..."
+                            sleep 2
+                        fi
+                    done
+                    
+                    if [[ "$update_success" == "true" ]]; then
+                        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+                        systemctl enable docker
+                        systemctl start docker
+                        log_success "Docker installed successfully"
+                    else
+                        log_error "Failed to update package list after adding Docker repository"
+                        return 1
+                    fi
+                else
+                    log_error "Failed to add Docker GPG key with all methods"
+                    return 1
+                fi
             fi
             
             # Install Docker Compose if not present
             if ! command -v docker-compose &> /dev/null; then
                 log_info "Installing Docker Compose..."
-                curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-                chmod +x /usr/local/bin/docker-compose
+                local compose_success=false
+                
+                # Try to install Docker Compose with retry
+                for attempt in {1..3}; do
+                    if curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose 2>/dev/null; then
+                        chmod +x /usr/local/bin/docker-compose
+                        if /usr/local/bin/docker-compose version &>/dev/null; then
+                            compose_success=true
+                            log_success "Docker Compose installed successfully"
+                            break
+                        fi
+                    fi
+                    log_warning "Docker Compose installation attempt $attempt failed, retrying..."
+                    sleep 2
+                done
+                
+                if [[ "$compose_success" != "true" ]]; then
+                    log_error "Failed to install Docker Compose after multiple attempts"
+                    return 1
+                fi
+            fi
+            
+            # Verify Docker installation
+            if ! verify_docker_installation; then
+                log_error "Docker installation verification failed"
+                return 1
+            fi
+            
+            # Verify Docker installation
+            if ! verify_docker_installation; then
+                log_error "Docker installation verification failed"
+                return 1
             fi
         fi
     elif command -v yum &> /dev/null; then
@@ -2562,9 +2651,60 @@ show_config_summary() {
     echo "  🔑 JWT Secret: ${JWT_SECRET:+Set (hidden)} ${JWT_SECRET:-Not set}"
 }
 
+# Clean up problematic Docker GPG keys
+cleanup_docker_gpg_keys() {
+    log_info "Cleaning up Docker GPG configuration..."
+    
+    # Remove potentially corrupted Docker GPG key and repository
+    rm -f /etc/apt/keyrings/docker.gpg 2>/dev/null || true
+    rm -f /etc/apt/sources.list.d/docker.list 2>/dev/null || true
+    
+    # Clean APT cache
+    apt-get clean 2>/dev/null || true
+    rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+    
+    log_success "Docker GPG cleanup completed"
+}
+
+# Verify Docker installation and functionality
+verify_docker_installation() {
+    log_info "Verifying Docker installation..."
+    
+    # Check if Docker command exists
+    if ! command -v docker &>/dev/null; then
+        log_error "Docker command not found"
+        return 1
+    fi
+    
+    # Check if Docker daemon is running
+    if ! docker info &>/dev/null; then
+        log_warning "Docker daemon not running, attempting to start..."
+        systemctl start docker
+        sleep 3
+        
+        if ! docker info &>/dev/null; then
+            log_error "Failed to start Docker daemon"
+            return 1
+        fi
+    fi
+    
+    # Test Docker with a simple container
+    log_info "Testing Docker functionality..."
+    if timeout 30 docker run --rm hello-world &>/dev/null; then
+        log_success "Docker is working correctly"
+        return 0
+    else
+        log_error "Docker test container failed"
+        return 1
+    fi
+}
+
 # Comprehensive pre-deployment checks
 pre_deployment_checks() {
     log_step "🔍 Running pre-deployment checks..."
+    
+    # Clean up any problematic GPG keys before installation
+    cleanup_docker_gpg_keys
     
     local checks_passed=0
     local total_checks=6
