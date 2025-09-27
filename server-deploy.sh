@@ -35,6 +35,7 @@ MIRROR_REGION="${MIRROR_REGION:-auto}"
 
 # Configuration settings with defaults
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
+JWT_SECRET="${JWT_SECRET:-}"
 CUSTOM_DOMAIN="${CUSTOM_DOMAIN:-}"
 CUSTOM_EMAIL="${CUSTOM_EMAIL:-}"
 CUSTOM_HTTP_PORT="${CUSTOM_HTTP_PORT:-}"
@@ -1892,7 +1893,7 @@ setup_interactive_config() {
     echo
     log_info "🔐 Security Configuration"
     
-    if [[ -z "$JWT_SECRET" ]]; then
+    if [[ -z "${JWT_SECRET:-}" ]]; then
         log_warning "JWT secret not set. Generating a secure random secret..."
         JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p)
         log_success "JWT secret generated automatically"
@@ -2061,7 +2062,7 @@ setup_default_config() {
     CUSTOM_BACKUP_RETENTION="${CUSTOM_BACKUP_RETENTION:-30}"
     
     # Generate JWT secret if not provided
-    if [[ -z "$JWT_SECRET" ]]; then
+    if [[ -z "${JWT_SECRET:-}" ]]; then
         JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p)
         log_info "Generated JWT secret automatically"
     fi
