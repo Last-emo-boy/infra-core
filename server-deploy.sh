@@ -2333,8 +2333,18 @@ setup_default_config() {
 # Check if port is available
 check_port_available() {
     local port=$1
-    if netstat -tlnp 2>/dev/null | grep -q ":${port} "; then
+    
+    # Validate port number
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || [[ "$port" -lt 1 ]] || [[ "$port" -gt 65535 ]]; then
+        log_error "Invalid port number: $port"
+        return 1
+    fi
+    
+    # Check if port is in use (check both IPv4 and IPv6)
+    if netstat -tlnp 2>/dev/null | grep -E ":${port}[[:space:]]" >/dev/null; then
         return 1  # Port is in use
+    elif ss -tlnp 2>/dev/null | grep -E ":${port}[[:space:]]" >/dev/null; then
+        return 1  # Port is in use (alternative check)
     else
         return 0  # Port is available
     fi
@@ -2370,14 +2380,16 @@ update_docker_compose_ports() {
             return 1
         fi
         
-        # Update ports in docker-compose.yml (escape special characters)
-        local escaped_http_port=$(printf '%s\n' "$CUSTOM_HTTP_PORT" | sed 's/[[\.*^$()+?{|]/\\&/g')
-        local escaped_https_port=$(printf '%s\n' "$CUSTOM_HTTPS_PORT" | sed 's/[[\.*^$()+?{|]/\\&/g')
-        local escaped_api_port=$(printf '%s\n' "$CUSTOM_API_PORT" | sed 's/[[\.*^$()+?{|]/\\&/g')
+        # Update ports in docker-compose.yml (simple validation - ports should be numbers)
+        if [[ ! "$CUSTOM_HTTP_PORT" =~ ^[0-9]+$ ]] || [[ ! "$CUSTOM_HTTPS_PORT" =~ ^[0-9]+$ ]] || [[ ! "$CUSTOM_API_PORT" =~ ^[0-9]+$ ]]; then
+            log_error "Invalid port numbers provided"
+            return 1
+        fi
         
-        sed -i "s/\"80:80\"/\"${escaped_http_port}:80\"/g" "$compose_file"
-        sed -i "s/\"443:443\"/\"${escaped_https_port}:443\"/g" "$compose_file"
-        sed -i "s/\"8082:8082\"/\"${escaped_api_port}:8082\"/g" "$compose_file"
+        # Update ports in docker-compose.yml
+        sed -i "s/\"80:80\"/\"${CUSTOM_HTTP_PORT}:80\"/g" "$compose_file"
+        sed -i "s/\"443:443\"/\"${CUSTOM_HTTPS_PORT}:443\"/g" "$compose_file"
+        sed -i "s/\"8082:8082\"/\"${CUSTOM_API_PORT}:8082\"/g" "$compose_file"
         
         # Add resource limits
         if ! grep -q "deploy:" "$compose_file"; then
