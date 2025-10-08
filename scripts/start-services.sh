@@ -142,9 +142,9 @@ log_info "🎯 Starting individual services..."
 # Start Console API (8082)
 log_info "Starting core service: Console API"
 if command -v console >/dev/null 2>&1; then
-    start_service "console" "console"
+    start_service "console" "console" "" "--config=/app/configs/production.yaml"
 elif command -v /usr/local/bin/console >/dev/null 2>&1; then
-    start_service "console" "/usr/local/bin/console"
+    start_service "console" "/usr/local/bin/console" "" "--config=/app/configs/production.yaml"
 else
     log_error "Console binary not found"
 fi
@@ -152,9 +152,9 @@ fi
 # Start Gate (80/443)
 log_info "Starting core service: Gate"
 if command -v gate >/dev/null 2>&1; then
-    start_service "gate" "gate"
+    start_service "gate" "gate" "" "--config=/app/configs/production.yaml"
 elif command -v /usr/local/bin/gate >/dev/null 2>&1; then
-    start_service "gate" "/usr/local/bin/gate"
+    start_service "gate" "/usr/local/bin/gate" "" "--config=/app/configs/production.yaml"
 else
     log_error "Gate binary not found"
 fi
@@ -166,9 +166,9 @@ if [[ "${ENABLE_ORCHESTRATOR:-true}" == "true" ]]; then
     log_info "Starting service: Orchestrator (with port fallback)"
     local orch_port="${INFRA_CORE_ORCH_PORT:-9090}"
     if command -v orchestrator >/dev/null 2>&1; then
-        start_service "orchestrator" "orchestrator" "$orch_port"
+        start_service "orchestrator" "orchestrator" "$orch_port" "--config=/app/configs/production.yaml"
     elif command -v /usr/local/bin/orchestrator >/dev/null 2>&1; then
-        start_service "orchestrator" "/usr/local/bin/orchestrator" "$orch_port"
+        start_service "orchestrator" "/usr/local/bin/orchestrator" "$orch_port" "--config=/app/configs/production.yaml"
     else
         log_warning "Orchestrator enabled but binary not found - will be built in next deployment"
     fi
@@ -181,9 +181,9 @@ if [[ "${ENABLE_PROBE_MONITOR:-true}" == "true" ]]; then
     log_info "Starting service: Probe Monitor (with port fallback)"
     local probe_port="${INFRA_CORE_PROBE_PORT:-8085}"
     if command -v probe >/dev/null 2>&1; then
-        start_service "probe" "probe" "$probe_port"
+        start_service "probe" "probe" "$probe_port" "--config=/app/configs/production.yaml"
     elif command -v /usr/local/bin/probe >/dev/null 2>&1; then
-        start_service "probe" "/usr/local/bin/probe" "$probe_port"
+        start_service "probe" "/usr/local/bin/probe" "$probe_port" "--config=/app/configs/production.yaml"
     else
         log_warning "Probe Monitor enabled but binary not found - will be built in next deployment"
     fi
@@ -196,9 +196,9 @@ if [[ "${ENABLE_SNAP_SERVICE:-true}" == "true" ]]; then
     log_info "Starting service: Snap Service (with port fallback)"
     local snap_port="${INFRA_CORE_SNAP_PORT:-8086}"
     if command -v snap >/dev/null 2>&1; then
-        start_service "snap" "snap" "$snap_port"
+        start_service "snap" "snap" "$snap_port" "--config=/app/configs/production.yaml"
     elif command -v /usr/local/bin/snap >/dev/null 2>&1; then
-        start_service "snap" "/usr/local/bin/snap" "$snap_port"
+        start_service "snap" "/usr/local/bin/snap" "$snap_port" "--config=/app/configs/production.yaml"
     else
         log_warning "Snap Service enabled but binary not found - will be built in next deployment"
     fi
@@ -350,19 +350,19 @@ while true; do
                 
                 case "$service" in
                     "console")
-                        start_service "console" "/usr/local/bin/console" || log_error "Failed to restart console"
+                        start_service "console" "/usr/local/bin/console" "" "--config=/app/configs/production.yaml" || log_error "Failed to restart console"
                         ;;
                     "gate")
-                        start_service "gate" "/usr/local/bin/gate" || log_error "Failed to restart gate"
+                        start_service "gate" "/usr/local/bin/gate" "" "--config=/app/configs/production.yaml" || log_error "Failed to restart gate"
                         ;;
                     "orchestrator")
-                        start_service "orchestrator" "/usr/local/bin/orchestrator" "$service_port" || log_error "Failed to restart orchestrator"
+                        start_service "orchestrator" "/usr/local/bin/orchestrator" "$service_port" "--config=/app/configs/production.yaml" || log_error "Failed to restart orchestrator"
                         ;;
                     "probe")
-                        start_service "probe" "/usr/local/bin/probe" "$service_port" || log_error "Failed to restart probe"
+                        start_service "probe" "/usr/local/bin/probe" "$service_port" "--config=/app/configs/production.yaml" || log_error "Failed to restart probe"
                         ;;
                     "snap")
-                        start_service "snap" "/usr/local/bin/snap" "$service_port" || log_error "Failed to restart snap"
+                        start_service "snap" "/usr/local/bin/snap" "$service_port" "--config=/app/configs/production.yaml" || log_error "Failed to restart snap"
                         ;;
                 esac
             fi
