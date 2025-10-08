@@ -2338,7 +2338,7 @@ console:
     timeout: "30s"
   auth:
     jwt:
-      secret: ""  # Set via environment variable
+      secret: "$JWT_SECRET"
       expires_hours: 8
     session:
       timeout_minutes: 30
@@ -2688,7 +2688,7 @@ console:
     timeout: "30s"
   auth:
     jwt:
-      secret: ""  # Set via environment variable
+      secret: "$JWT_SECRET"
       expires_hours: 8
     session:
       timeout_minutes: 30
