@@ -152,9 +152,9 @@ fi
 # Start Gate (80/443)
 log_info "Starting core service: Gate"
 if command -v gate >/dev/null 2>&1; then
-    start_service "gate" "gate" "" "--config=/app/configs/production.yaml"
+    start_service "gate" "gate"
 elif command -v /usr/local/bin/gate >/dev/null 2>&1; then
-    start_service "gate" "/usr/local/bin/gate" "" "--config=/app/configs/production.yaml"
+    start_service "gate" "/usr/local/bin/gate"
 else
     log_error "Gate binary not found"
 fi
@@ -355,7 +355,7 @@ while true; do
                         start_service "console" "/usr/local/bin/console" "" "--config=/app/configs/production.yaml" || log_error "Failed to restart console"
                         ;;
                     "gate")
-                        start_service "gate" "/usr/local/bin/gate" "" "--config=/app/configs/production.yaml" || log_error "Failed to restart gate"
+                        start_service "gate" "/usr/local/bin/gate" || log_error "Failed to restart gate"
                         ;;
                     "orchestrator")
                         start_service "orchestrator" "/usr/local/bin/orchestrator" "$service_port" "--config=/app/configs/production.yaml" || log_error "Failed to restart orchestrator"
