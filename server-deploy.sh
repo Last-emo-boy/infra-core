@@ -2351,6 +2351,53 @@ console:
     enabled: $CUSTOM_BACKUP_ENABLED
     retention_days: ${CUSTOM_BACKUP_RETENTION:-30}
     path: "/var/lib/infra-core/backups"
+
+orchestrator:
+  host: "0.0.0.0"
+  port: ${ORCHESTRATOR_PORT:-${CUSTOM_ORCHESTRATOR_PORT:-19090}}
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/orchestrator.log"
+  node_name: "production-node"
+  cluster_mode: true
+  health_check_interval: "30s"
+  resource_monitoring: true
+  default_replicas: 3
+  max_deployments: 100
+  enable_metrics: true
+
+probe:
+  host: "0.0.0.0"
+  port: ${PROBE_PORT:-${CUSTOM_PROBE_PORT:-18085}}
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/probe.log"
+  check_interval: "30s"
+  alert_interval: "5m"
+  cleanup_interval: "24h"
+  result_retention: "7d"
+  alert_retention: "30d"
+  enable_notifications: true
+  max_concurrent_probes: 50
+
+snap:
+  host: "0.0.0.0"
+  port: ${SNAP_PORT:-${CUSTOM_SNAP_PORT:-18086}}
+  logs:
+    level: "info"
+    console: false
+    file: "/var/log/infra-core/snap.log"
+  repo_dir: "/var/lib/infra-core/snapshots"
+  temp_dir: "/tmp/infra-core/snap"
+  max_parallel: 8
+  rate_limit: "50MB/s"
+  scrub_interval: "24h"
+  default_retention:
+    daily: 7
+    weekly: 4
+    monthly: 12
 EOF
     
     # Update docker-compose with custom ports
@@ -2369,6 +2416,9 @@ setup_default_config() {
     CUSTOM_HTTP_PORT="${CUSTOM_HTTP_PORT:-80}"
     CUSTOM_HTTPS_PORT="${CUSTOM_HTTPS_PORT:-443}"
     CUSTOM_API_PORT="${CUSTOM_API_PORT:-8082}"
+    CUSTOM_ORCHESTRATOR_PORT="${CUSTOM_ORCHESTRATOR_PORT:-19090}"
+    CUSTOM_PROBE_PORT="${CUSTOM_PROBE_PORT:-18085}"
+    CUSTOM_SNAP_PORT="${CUSTOM_SNAP_PORT:-18086}"
     CUSTOM_SSL_ENABLED="${CUSTOM_SSL_ENABLED:-true}"
     CUSTOM_MEMORY_LIMIT="${CUSTOM_MEMORY_LIMIT:-2g}"
     CUSTOM_CPU_LIMIT="${CUSTOM_CPU_LIMIT:-2}"
