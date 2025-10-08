@@ -242,7 +242,11 @@ validate_system_requirements() {
         log_info "Deploy directory doesn't exist, checking parent: $check_dir"
     fi
     
-    available_space_kb=$(df "$check_dir" 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
+    available_space_kb=$(df "$check_dir" 2>/dev/null | awk 'NR==2{print $4}' | tr -d '\n\r\t ' || echo "0")
+    # Ensure we have a valid number
+    if [[ ! "$available_space_kb" =~ ^[0-9]+$ ]]; then
+        available_space_kb=0
+    fi
     local available_space_gb=$((available_space_kb / 1024 / 1024))
     
     # If still getting 0, try alternative methods
@@ -258,14 +262,20 @@ validate_system_requirements() {
         # Method 1: Check root filesystem
         methods_tried=$((methods_tried + 1))
         log_info "Method $methods_tried: Checking root filesystem..."
-        available_space_kb=$(df / 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
+        available_space_kb=$(df / 2>/dev/null | awk 'NR==2{print $4}' | tr -d '\n\r\t ' || echo "0")
+        if [[ ! "$available_space_kb" =~ ^[0-9]+$ ]]; then
+            available_space_kb=0
+        fi
         available_space_gb=$((available_space_kb / 1024 / 1024))
         
         if [[ $available_space_gb -eq 0 ]]; then
             # Method 2: Use df with different options
             methods_tried=$((methods_tried + 1))
             log_info "Method $methods_tried: Using df with POSIX output..."
-            available_space_kb=$(df -P / 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
+            available_space_kb=$(df -P / 2>/dev/null | awk 'NR==2{print $4}' | tr -d '\n\r\t ' || echo "0")
+            if [[ ! "$available_space_kb" =~ ^[0-9]+$ ]]; then
+                available_space_kb=0
+            fi
             available_space_gb=$((available_space_kb / 1024 / 1024))
         fi
         
@@ -965,11 +975,17 @@ create_backup() {
         # Check available space for backup
         local source_size=0
         if [[ -d "$DEPLOY_DIR/current" ]]; then
-            source_size=$(du -sb "$DEPLOY_DIR/current" 2>/dev/null | cut -f1 || echo "0")
+            source_size=$(du -sb "$DEPLOY_DIR/current" 2>/dev/null | cut -f1 | tr -d '\n\r\t ' || echo "0")
+            if [[ ! "$source_size" =~ ^[0-9]+$ ]]; then
+                source_size=0
+            fi
         fi
         
         local available_space
-        available_space=$(df "$BACKUP_DIR" | awk 'NR==2{print $4}' | head -1)
+        available_space=$(df "$BACKUP_DIR" | awk 'NR==2{print $4}' | head -1 | tr -d '\n\r\t ' || echo "0")
+        if [[ ! "$available_space" =~ ^[0-9]+$ ]]; then
+            available_space=0
+        fi
         available_space=$((available_space * 1024))
         
         if [[ $source_size -gt $((available_space / 2)) ]]; then
