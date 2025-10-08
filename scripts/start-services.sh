@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # InfraCore Services Startup Script
 
 set -e
@@ -85,7 +85,7 @@ start_service() {
     log_info "Starting $service_name..."
     
     # If port is specified, handle port fallback
-    if [[ -n "$service_port" ]]; then
+    if [ -n "$service_port" ]; then
         local available_port
         case "$service_name" in
             "orchestrator")
@@ -102,7 +102,7 @@ start_service() {
                 ;;
         esac
         
-        if [[ -z "$available_port" ]]; then
+        if [ -z "$available_port" ]; then
             log_error "$service_name: No available ports, skipping service startup"
             return 1
         fi
@@ -122,7 +122,7 @@ start_service() {
     sleep 2
     if kill -0 "$pid" 2>/dev/null; then
         local port_info=""
-        if [[ -f "/tmp/${service_name}.port" ]]; then
+        if [ -f "/tmp/${service_name}.port" ]; then
             port_info=" on port $(cat "/tmp/${service_name}.port")"
         fi
         log_success "$service_name started with PID $pid$port_info"
@@ -162,7 +162,7 @@ fi
 # All Services (enabled by default with port fallback)
 
 # Start Orchestrator (9090) - with port fallback
-if [[ "${ENABLE_ORCHESTRATOR:-true}" == "true" ]]; then
+if [ "${ENABLE_ORCHESTRATOR:-true}" = "true" ]; then
     log_info "Starting service: Orchestrator (with port fallback)"
     local orch_port="${INFRA_CORE_ORCH_PORT:-9090}"
     if command -v orchestrator >/dev/null 2>&1; then
@@ -177,7 +177,7 @@ else
 fi
 
 # Start Probe Monitor (8085) - with port fallback
-if [[ "${ENABLE_PROBE_MONITOR:-true}" == "true" ]]; then
+if [ "${ENABLE_PROBE_MONITOR:-true}" = "true" ]; then
     log_info "Starting service: Probe Monitor (with port fallback)"
     local probe_port="${INFRA_CORE_PROBE_PORT:-8085}"
     if command -v probe >/dev/null 2>&1; then
@@ -192,7 +192,7 @@ else
 fi
 
 # Start Snap Service (8086) - with port fallback
-if [[ "${ENABLE_SNAP_SERVICE:-true}" == "true" ]]; then
+if [ "${ENABLE_SNAP_SERVICE:-true}" = "true" ]; then
     log_info "Starting service: Snap Service (with port fallback)"
     local snap_port="${INFRA_CORE_SNAP_PORT:-8086}"
     if command -v snap >/dev/null 2>&1; then
@@ -247,9 +247,9 @@ check_service "gate" "80"
 
 # Check additional services with dynamic ports
 for service in orchestrator probe snap; do
-    if [[ -f "/tmp/${service}.pid" ]]; then
-        local service_port="unknown"
-        if [[ -f "/tmp/${service}.port" ]]; then
+    if [ -f "/tmp/${service}.pid" ]; then
+        service_port="unknown"
+        if [ -f "/tmp/${service}.port" ]; then
             service_port=$(cat "/tmp/${service}.port")
         fi
         check_service "$service" "$service_port"
@@ -275,12 +275,14 @@ cleanup() {
                 kill -TERM "$pid" 2>/dev/null || true
                 
                 # Wait for graceful shutdown
-                for i in {1..10}; do
+                i=1
+                while [ $i -le 10 ]; do
                     if ! kill -0 "$pid" 2>/dev/null; then
                         log_success "$service stopped gracefully"
                         break
                     fi
                     sleep 1
+                    i=$((i + 1))
                 done
                 
                 # Force kill if still running
@@ -309,7 +311,7 @@ log_info "  📊 Health Check: http://localhost:8082/api/v1/health"
 
 # Display additional service endpoints with dynamic ports
 for service in orchestrator probe snap; do
-    if [[ -f "/tmp/${service}.pid" && -f "/tmp/${service}.port" ]]; then
+    if [ -f "/tmp/${service}.pid" ] && [ -f "/tmp/${service}.port" ]; then
         local service_port=$(cat "/tmp/${service}.port")
         case "$service" in
             "orchestrator")
