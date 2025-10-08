@@ -2124,16 +2124,55 @@ validate_port() {
     local default_port="$2"
     local port_name="$3"
     
-    # Take only the first line/word from input
-    port_input=$(echo "$port_input" | head -n1 | awk '{print $1}')
+    # Clean input - remove whitespace and take only the first number
+    port_input=$(echo "$port_input" | tr -d '\n\r\t ' | grep -o '^[0-9]*' | head -1)
     
-    # Validate port number
-    if [[ -n "$port_input" ]] && ! [[ "$port_input" =~ ^[0-9]+$ ]] || [[ "$port_input" -lt 1 || "$port_input" -gt 65535 ]]; then
+    # If empty, use default
+    if [[ -z "$port_input" ]]; then
+        echo "$default_port"
+        return
+    fi
+    
+    # Validate port number range
+    if [[ "$port_input" =~ ^[0-9]+$ ]] && [[ "$port_input" -ge 1 && "$port_input" -le 65535 ]]; then
+        echo "$port_input"
+    else
         log_warning "Invalid $port_name port '$port_input'. Using default: $default_port"
         echo "$default_port"
-    else
-        echo "${port_input:-$default_port}"
     fi
+}
+
+# Setup default configuration for non-interactive mode
+setup_default_config() {
+    log_info "🔧 Setting up default configuration..."
+    
+    # Generate JWT secret if not provided
+    if [[ -z "${JWT_SECRET:-}" ]]; then
+        JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p)
+        log_success "JWT secret generated automatically"
+    fi
+    
+    # Set safe default values
+    CUSTOM_DOMAIN="${CUSTOM_DOMAIN:-localhost}"
+    CUSTOM_EMAIL="${CUSTOM_EMAIL:-admin@localhost}"
+    CUSTOM_HTTP_PORT="${CUSTOM_HTTP_PORT:-80}"
+    CUSTOM_HTTPS_PORT="${CUSTOM_HTTPS_PORT:-443}"
+    CUSTOM_API_PORT="${CUSTOM_API_PORT:-8082}"
+    CUSTOM_SSL_ENABLED="${CUSTOM_SSL_ENABLED:-false}"
+    CUSTOM_MEMORY_LIMIT="${CUSTOM_MEMORY_LIMIT:-2g}"
+    CUSTOM_CPU_LIMIT="${CUSTOM_CPU_LIMIT:-2}"
+    CUSTOM_BACKUP_ENABLED="${CUSTOM_BACKUP_ENABLED:-true}"
+    CUSTOM_BACKUP_RETENTION="${CUSTOM_BACKUP_RETENTION:-30}"
+    
+    log_info "Using default configuration:"
+    log_info "  Domain: $CUSTOM_DOMAIN"
+    log_info "  Admin Email: $CUSTOM_EMAIL"
+    log_info "  HTTP Port: $CUSTOM_HTTP_PORT"
+    log_info "  HTTPS Port: $CUSTOM_HTTPS_PORT"
+    log_info "  API Port: $CUSTOM_API_PORT"
+    log_info "  SSL Enabled: $CUSTOM_SSL_ENABLED"
+    
+    apply_custom_config
 }
 
 # Interactive configuration setup
@@ -2448,15 +2487,28 @@ INFRA_CORE_JWT_SECRET=$JWT_SECRET
 INFRA_CORE_ACME_EMAIL=$CUSTOM_EMAIL
 EOF
     
-    # Create .env file for Docker Compose
+    # Create .env file for Docker Compose with safe defaults
     cat > "$DEPLOY_DIR/current/.env" << EOF
-JWT_SECRET=$JWT_SECRET
-ACME_EMAIL=$CUSTOM_EMAIL
+# InfraCore Environment Configuration - Generated $(date)
 INFRA_CORE_ENV=$ENVIRONMENT
-CUSTOM_DOMAIN=$CUSTOM_DOMAIN
-CUSTOM_HTTP_PORT=$CUSTOM_HTTP_PORT
-CUSTOM_HTTPS_PORT=$CUSTOM_HTTPS_PORT
-CUSTOM_API_PORT=$CUSTOM_API_PORT
+INFRA_CORE_JWT_SECRET=$JWT_SECRET
+INFRA_CORE_ACME_EMAIL=$CUSTOM_EMAIL
+
+# Port Configuration (using safe defaults to avoid conflicts)
+INFRA_CORE_ORCH_PORT=19090
+INFRA_CORE_PROBE_PORT=18085
+INFRA_CORE_SNAP_PORT=18086
+
+# Service Enablement
+ENABLE_ORCHESTRATOR=true
+ENABLE_PROBE_MONITOR=true
+ENABLE_SNAP_SERVICE=true
+
+# Custom Domain
+CUSTOM_DOMAIN=${CUSTOM_DOMAIN:-localhost}
+CUSTOM_HTTP_PORT=${CUSTOM_HTTP_PORT:-80}
+CUSTOM_HTTPS_PORT=${CUSTOM_HTTPS_PORT:-443}
+CUSTOM_API_PORT=${CUSTOM_API_PORT:-8082}
 EOF
     
     chown "$SERVICE_USER:$SERVICE_USER" "/etc/infra-core/environment"
@@ -2943,49 +2995,60 @@ pre_deployment_checks() {
 check_port_conflicts() {
     log_info "🔍 Checking port conflicts with automatic fallback..."
     
-    local required_ports=("80" "443" "8082" "9090" "8085" "8086")
+    local critical_ports=("80" "443" "8082")
+    local optional_ports=("9090" "8085" "8086")
     local conflicts=()
-    local fallback_info=()
+    local fallback_applied=false
     
-    for port in "${required_ports[@]}"; do
-        if netstat -tlnp 2>/dev/null | grep -q ":${port} "; then
-            local process=$(netstat -tlnp 2>/dev/null | grep ":${port} " | awk '{print $7}' | head -1)
+    # Check critical ports first
+    for port in "${critical_ports[@]}"; do
+        if check_port_available "$port"; then
+            log_info "✅ Port $port is available"
+        else
+            local process=$(ss -tlnp 2>/dev/null | grep ":${port} " | awk '{print $7}' | head -1 || echo "unknown")
             conflicts+=("${port}:${process}")
-            
-            # Add fallback information for optional services
-            case "$port" in
-                9090)
-                    fallback_info+=("Orchestrator will fallback to port 19090 or 29090")
-                    ;;
-                8085) 
-                    fallback_info+=("Probe Monitor will fallback to port 18085 or 28085")
-                    ;;
-                8086)
-                    fallback_info+=("Snap Service will fallback to port 18086 or 28086")
-                    ;;
-                80|443|8082)
-                    fallback_info+=("Critical service port $port - manual intervention may be needed")
-                    ;;
-            esac
+            log_warning "❌ Port $port is occupied by $process"
         fi
     done
     
-    if [[ ${#conflicts[@]} -gt 0 ]]; then
-        log_warning "Port conflicts detected:"
-        for conflict in "${conflicts[@]}"; do
-            log_warning "  Port ${conflict%:*} is used by ${conflict#*:}"
-        done
-        
-        if [[ ${#fallback_info[@]} -gt 0 ]]; then
-            log_info "Fallback configuration:"
-            for info in "${fallback_info[@]}"; do
-                log_info "  • $info"
-            done
+    # Check optional ports and note fallbacks
+    for port in "${optional_ports[@]}"; do
+        if ! check_port_available "$port"; then
+            local process=$(ss -tlnp 2>/dev/null | grep ":${port} " | awk '{print $7}' | head -1 || echo "unknown")
+            log_warning "⚠️ Port $port is occupied by $process"
+            
+            case "$port" in
+                9090)
+                    log_info "🔄 Will use fallback: Orchestrator port 19090"
+                    ;;
+                8085) 
+                    log_info "🔄 Will use fallback: Probe Monitor port 18085"
+                    ;;
+                8086)
+                    log_info "🔄 Will use fallback: Snap Service port 18086"
+                    ;;
+            esac
+            fallback_applied=true
+        else
+            log_info "✅ Port $port is available"
         fi
+    done
+    
+    # Report results
+    if [[ ${#conflicts[@]} -gt 0 ]]; then
+        log_error "Critical port conflicts detected:"
+        for conflict in "${conflicts[@]}"; do
+            log_error "  Port ${conflict%:*} is used by ${conflict#*:}"
+        done
         return 1
     fi
     
-    log_success "All ports are available"
+    if [[ "$fallback_applied" == "true" ]]; then
+        log_success "✅ Port conflicts resolved with automatic fallbacks"
+    else
+        log_success "✅ No port conflicts detected"
+    fi
+    
     return 0
 }
 
@@ -3856,6 +3919,12 @@ main_deploy() {
     # Set up script permissions
     monitor_deployment_progress "Setting up script permissions"
     setup_script_permissions
+    
+    # Setup configuration before deployment
+    monitor_deployment_progress "Setting up configuration"
+    if [[ -z "$CUSTOM_DOMAIN" ]]; then
+        setup_default_config  # Auto-configure with safe defaults
+    fi
     
     # Deploy based on type
     monitor_deployment_progress "Deploying application ($DEPLOYMENT_TYPE)"

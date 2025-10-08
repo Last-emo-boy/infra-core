@@ -19,8 +19,7 @@
 [![GitHub pull requests](https://img.shields.io/github/issues-pr/Last-emo-boy/infra-core)](https://github.com/Last-emo-boy/infra-core/pulls)
 [![GitHub stars](https://img.shields.io/github/stars/Last-emo-boy/infra-core?style=social)](https://github.com/Last-emo-boy/infra-core/stargazers)
 
-[![wakatime](https://wakatime.com/badge/user/5bd3393a-a3b1-48aa-90a2-bcf1f6bfcb7f/project/58091149-5978-444c-8aba-dc8c8ef8f045.svg)](https://wakatime.com/badge/user/5bd3393a-a3b1-48aa-90a2-bcf1f6bfcb7f/project/58091149-5978-444c-8aba-dc8c8ef8f045)
-
+[![Wakatime](https://wakatime.com/badge/github/Last-emo-boy/infra-core.svg)](https://wakatime.com/badge/github/Last-emo-boy/infra-core)
 [![Contributors](https://img.shields.io/github/contributors/Last-emo-boy/infra-core)](https://github.com/Last-emo-boy/infra-core/graphs/contributors)
 [![Last Commit](https://img.shields.io/github/last-commit/Last-emo-boy/infra-core)](https://github.com/Last-emo-boy/infra-core/commits/main)
 [![Code Size](https://img.shields.io/github/languages/code-size/Last-emo-boy/infra-core)](https://github.com/Last-emo-boy/infra-core)
@@ -389,20 +388,33 @@ npm run analyze
 
 ## ✅ 安装验证与测试
 
-### 🧪 快速验证安装
+### 🚀 快速启动指南
 
-安装完成后，按照以下步骤验证系统是否正常运行：
+如果你的系统目前没有运行任何容器，按照以下步骤启动并验证：
 
-#### 1. 🔍 检查服务状态
+#### 1. � 启动系统
 
 ```bash
-# 使用部署脚本检查状态
-sudo ./server-deploy.sh --status
+# 方式一：使用 Docker Compose（推荐）
+docker-compose up -d
 
-# 或者手动检查 Docker 服务
+# 方式二：使用智能部署脚本（Linux）
+sudo ./server-deploy.sh --mirror
+
+# 方式三：使用开发环境
+docker-compose -f docker-compose.dev.yml up -d
+```
+
+#### 2. 🔍 检查服务状态
+
+```bash
+# 检查容器状态
 docker-compose ps
 
 # 查看服务日志
+docker-compose logs --tail=20
+
+# 实时跟踪日志
 docker-compose logs -f
 ```
 
@@ -426,21 +438,23 @@ docker-compose logs -f
   • UI Dev Server: http://localhost:5173 (if in dev mode)
 ```
 
-#### 2. 🌐 Web 界面测试
+#### 3. 🌐 Web 界面测试
 
 打开浏览器访问以下地址：
 
 | 服务 | 地址 | 预期结果 |
 |------|------|----------|
 | **主界面** | `http://localhost` 或 `http://your-domain.com` | 显示登录页面 |
-| **API 健康检查** | `http://localhost:8082/api/v1/health` | 返回 JSON 健康状态 |
+| **API 健康检查** | `http://localhost:19090/api/v1/health` | 返回 JSON 健康状态 |
 | **开发环境 UI** | `http://localhost:5173` | React 开发服务器界面 |
 
-#### 3. � 登录功能测试
+**注意**: 端口 19090 是为了避免与 Clash 代理的 9090 端口冲突而设置的备用端口。
+
+#### 4. 🔐 登录功能测试
 
 ```bash
 # 测试默认管理员登录
-curl -X POST http://localhost:8082/api/v1/auth/login \
+curl -X POST http://localhost:19090/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin123"}'
 ```
@@ -462,24 +476,71 @@ curl -X POST http://localhost:8082/api/v1/auth/login \
 }
 ```
 
-#### 4. 📊 API 接口测试
+#### 5. 📊 API 接口测试
 
 ```bash
 # 获取 JWT 令牌（从上一步获取）
 TOKEN="your-jwt-token-here"
 
 # 测试用户信息接口
-curl -X GET http://localhost:8082/api/v1/users/profile \
+curl -X GET http://localhost:19090/api/v1/users/profile \
   -H "Authorization: Bearer $TOKEN"
 
 # 测试系统信息接口
-curl -X GET http://localhost:8082/api/v1/system/info \
+curl -X GET http://localhost:19090/api/v1/system/info \
   -H "Authorization: Bearer $TOKEN"
 
 # 测试服务列表接口
-curl -X GET http://localhost:8082/api/v1/services \
+curl -X GET http://localhost:19090/api/v1/services \
   -H "Authorization: Bearer $TOKEN"
 ```
+
+### 🆘 没有开发环境？使用这些命令
+
+如果你的开发电脑没有环境，可以运行以下命令来验证系统工作状态：
+
+#### 📋 快速健康检查
+```bash
+# 创建简单的健康检查脚本
+cat > health-check.sh << 'EOF'
+#!/bin/bash
+echo "🏥 InfraCore 健康检查"
+echo "===================="
+
+echo "📦 检查容器状态..."
+docker-compose ps
+
+echo "🌐 检查网络服务..."
+curl -f http://localhost:19090/api/v1/health &>/dev/null && echo "✅ API 服务正常" || echo "❌ API 服务异常"
+curl -f http://localhost/ &>/dev/null && echo "✅ Web 界面正常" || echo "❌ Web 界面异常"
+
+echo "💻 系统资源使用："
+docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+EOF
+
+chmod +x health-check.sh
+./health-check.sh
+```
+
+#### 🚀 一键启动和验证
+```bash
+# 启动系统并等待服务就绪
+docker-compose up -d && sleep 30
+
+# 验证所有核心功能
+echo "验证 API 健康状态..."
+curl -s http://localhost:19090/api/v1/health | jq '.' || echo "API 服务未响应"
+
+echo "验证登录功能..."
+curl -s -X POST http://localhost:19090/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' | jq '.' || echo "登录功能异常"
+
+echo "检查服务日志..."
+docker-compose logs --tail=10
+```
+
+> 📖 **详细验证指南**: 查看 [SYSTEM_VERIFICATION_GUIDE.md](./SYSTEM_VERIFICATION_GUIDE.md) 获取完整的系统验证和故障排查指南。
 
 ### 🔧 镜像速度测试
 
@@ -808,69 +869,19 @@ sudo systemctl status infracore
 - 💼 说明使用场景
 - 🔧 提供解决方案建议
 
-## 📜 开源协议
-
-本项目采用 [MIT License](LICENSE) 开源协议，您可以自由使用、修改和分发。
-
-```
-MIT License
-
-Copyright (c) 2025 last-emo-boy
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-```
-
-## 🙏 致谢
-
-感谢以下开源项目和工具的支持：
-
-### 🛠️ 核心技术栈
-
-| 项目 | 版本 | 用途 | 官网 |
-|------|------|------|------|
-| ![Gin](https://img.shields.io/badge/Gin-1.11.0-00ADD8?style=flat&logo=go) | **Gin Web Framework** | Go HTTP 框架 | [gin-gonic.com](https://gin-gonic.com/) |
-| ![React](https://img.shields.io/badge/React-19.1.1-61DAFB?style=flat&logo=react) | **React** | 前端 UI 框架 | [reactjs.org](https://reactjs.org/) |
-| ![Vite](https://img.shields.io/badge/Vite-7.1.7-646CFF?style=flat&logo=vite) | **Vite** | 前端构建工具 | [vitejs.dev](https://vitejs.dev/) |
-| ![Tailwind](https://img.shields.io/badge/Tailwind-4.1.13-38B2AC?style=flat&logo=tailwind-css) | **Tailwind CSS** | CSS 框架 | [tailwindcss.com](https://tailwindcss.com/) |
-| ![SQLite](https://img.shields.io/badge/SQLite-modernc-003B57?style=flat&logo=sqlite) | **SQLite** | 轻量级数据库 | [sqlite.org](https://www.sqlite.org/) |
-| ![Docker](https://img.shields.io/badge/Docker-latest-2496ED?style=flat&logo=docker) | **Docker** | 容器化平台 | [docker.com](https://www.docker.com/) |
-
-### 🔧 开发工具
-
-- **TypeScript** - 类型安全的 JavaScript
-- **ESLint** - JavaScript/TypeScript 代码检查
-- **Prettier** - 代码格式化工具
-- **golangci-lint** - Go 代码质量检查
-- **GitHub Actions** - CI/CD 自动化
-
-### 🎨 UI/UX
-
-- **Lucide React** - 现代化图标库
-- **React Router** - 单页应用路由
-- **Axios** - HTTP 客户端库
-
-## 📞 联系支持
 
 ### 🆘 获取帮助
 
 - 📖 **文档中心** - [查看完整文档](https://github.com/Last-emo-boy/infra-core/tree/main/docs)
 - 🐛 **问题反馈** - [GitHub Issues](https://github.com/Last-emo-boy/infra-core/issues)
 - 💬 **讨论社区** - [GitHub Discussions](https://github.com/Last-emo-boy/infra-core/discussions)
-- 📧 **邮件联系** - [last-emo-boy@example.com](mailto:last-emo-boy@example.com)
+- 📧 **邮件联系** - [last-emo-boy@example.com](mailto:momoxiaomaster@gmail.com)
 
 ### 🌟 关注我们
 
 - 📱 **GitHub** - [@last-emo-boy](https://github.com/last-emo-boy)
-- 🐦 **Twitter** - [@last_emo_boy](https://twitter.com/last_emo_boy)
-- 📝 **博客** - [个人技术博客](https://blog.example.com)
+- 🐦 **Twitter** - [@last_emo_boy](https://x.com/w33d_emo_boy)
+- 📝 **博客** - [个人技术博客](https://w33d.xyz)
 
 ---
 
