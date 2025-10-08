@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 
 
+## [0.2.0-beta.7](https://github.com/Last-emo-boy/infra-core/compare/v0.2.0-beta.6...v0.2.0-beta.7) (2025-10-08)
+
+
+### Bug Fixes
+
+* Add dynamic service management and port fallback,no release ([83f0877](https://github.com/Last-emo-boy/infra-core/commit/83f0877ffef2fde1ba2dbd925d6da5f28ecc6a44))
+* Improve Docker installation robustness in deploy script,no release ([f113556](https://github.com/Last-emo-boy/infra-core/commit/f113556fc0119f263f7a4e1edbe708a1b61544ba))
+* Improve port validation and checks in deploy script, no release ([49c83aa](https://github.com/Last-emo-boy/infra-core/commit/49c83aa562dff0158d1d242c287c6ed2ecbc76f2))
+
 ## [0.2.0-beta.6](https://github.com/Last-emo-boy/infra-core/compare/v0.2.0-beta.4...v0.2.0-beta.6) (2025-09-27)
 
 
