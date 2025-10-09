@@ -237,7 +237,7 @@ RUN set -eux; \
         echo "🚀 Using speed-tested optimal Alpine mirror: $ALPINE_MIRROR"; \
         echo "$ALPINE_MIRROR/latest-stable/main" > /etc/apk/repositories; \
         echo "$ALPINE_MIRROR/latest-stable/community" >> /etc/apk/repositories; \
-        if apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl bash netstat-nat; then \
+        if apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl bash net-tools iproute2; then \
             echo "✅ Packages installed successfully with optimal mirror: $ALPINE_MIRROR"; \
         else \
             echo "❌ Optimal mirror failed, falling back to multiple mirrors..."; \
@@ -252,7 +252,7 @@ RUN set -eux; \
                 echo "Trying fallback mirror: $mirror"; \
                 echo "$mirror/latest-stable/main" > /etc/apk/repositories && \
                 echo "$mirror/latest-stable/community" >> /etc/apk/repositories && \
-                if apk update --no-cache 2>/dev/null && apk add --no-cache ca-certificates tzdata wget curl bash netstat-nat; then \
+                if apk update --no-cache 2>/dev/null && apk add --no-cache ca-certificates tzdata wget curl bash net-tools iproute2; then \
                     echo "✅ Packages installed successfully with fallback mirror: $mirror"; \
                     break; \
                 fi; \
@@ -263,7 +263,7 @@ RUN set -eux; \
         echo "Using Chinese Alpine mirror (region-based)"; \
         echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/latest-stable/main" > /etc/apk/repositories; \
         echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/latest-stable/community" >> /etc/apk/repositories; \
-        apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl bash netstat-nat; \
+        apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl bash net-tools iproute2; \
     else \
         echo "Using default mirror fallback strategy (prioritizing fast mirrors)"; \
         # Try Alpine mirrors one by one - prioritize fast Chinese mirrors first
@@ -281,7 +281,7 @@ RUN set -eux; \
             if apk update --no-cache 2>/dev/null; then \
                 echo "Successfully using mirror: $mirror"; \
                 # Install packages
-                if apk add --no-cache ca-certificates tzdata wget curl bash netstat-nat; then \
+                if apk add --no-cache ca-certificates tzdata wget curl bash net-tools iproute2; then \
                     echo "Packages installed successfully with mirror: $mirror"; \
                     break; \
                 else \
