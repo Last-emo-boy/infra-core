@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # InfraCore Services Startup Script
 
 set -e
@@ -164,7 +164,7 @@ fi
 # Start Orchestrator (9090) - with port fallback
 if [ "${ENABLE_ORCHESTRATOR:-true}" = "true" ]; then
     log_info "Starting service: Orchestrator (with port fallback)"
-    local orch_port="${INFRA_CORE_ORCH_PORT:-9090}"
+    orch_port="${INFRA_CORE_ORCH_PORT:-9090}"
     if command -v orchestrator >/dev/null 2>&1; then
         start_service "orchestrator" "orchestrator" "$orch_port" "--config=/app/configs/production.yaml"
     elif command -v /usr/local/bin/orchestrator >/dev/null 2>&1; then
@@ -179,7 +179,7 @@ fi
 # Start Probe Monitor (8085) - with port fallback
 if [ "${ENABLE_PROBE_MONITOR:-true}" = "true" ]; then
     log_info "Starting service: Probe Monitor (with port fallback)"
-    local probe_port="${INFRA_CORE_PROBE_PORT:-8085}"
+    probe_port="${INFRA_CORE_PROBE_PORT:-8085}"
     if command -v probe >/dev/null 2>&1; then
         start_service "probe" "probe" "$probe_port" "--config=/app/configs/production.yaml"
     elif command -v /usr/local/bin/probe >/dev/null 2>&1; then
@@ -194,7 +194,7 @@ fi
 # Start Snap Service (8086) - with port fallback
 if [ "${ENABLE_SNAP_SERVICE:-true}" = "true" ]; then
     log_info "Starting service: Snap Service (with port fallback)"
-    local snap_port="${INFRA_CORE_SNAP_PORT:-8086}"
+    snap_port="${INFRA_CORE_SNAP_PORT:-8086}"
     if command -v snap >/dev/null 2>&1; then
         start_service "snap" "snap" "$snap_port" "--config=/app/configs/production.yaml"
     elif command -v /usr/local/bin/snap >/dev/null 2>&1; then
@@ -312,7 +312,7 @@ log_info "  📊 Health Check: http://localhost:8082/api/v1/health"
 # Display additional service endpoints with dynamic ports
 for service in orchestrator probe snap; do
     if [ -f "/tmp/${service}.pid" ] && [ -f "/tmp/${service}.port" ]; then
-        local service_port=$(cat "/tmp/${service}.port")
+        service_port=$(cat "/tmp/${service}.port")
         case "$service" in
             "orchestrator")
                 log_info "  🎯 Orchestrator: http://localhost:$service_port"
@@ -345,7 +345,7 @@ while true; do
                 log_info "Attempting to restart $service..."
                 
                 # Restart the service with port information
-                local service_port=""
+                service_port=""
                 if [ -f "$port_file" ]; then
                     service_port=$(cat "$port_file")
                 fi
