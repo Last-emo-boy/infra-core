@@ -1,5 +1,6 @@
-#!/bin/bash
+#!/bin/sh
 # InfraCore Services Startup Script
+# Compatible with POSIX sh (ash in Alpine)
 
 set -e
 

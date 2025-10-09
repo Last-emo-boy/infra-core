@@ -7,6 +7,8 @@ services:
       target: production-debug
     container_name: infra-core
     restart: unless-stopped
+    # Override the CMD to use sh instead of relying on shebang
+    command: ["/bin/sh", "/usr/local/bin/start-services.sh"]
     ports:
       - "80:80"        # Gate HTTP
       - "443:443"      # Gate HTTPS  

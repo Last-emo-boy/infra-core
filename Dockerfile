@@ -252,7 +252,7 @@ RUN set -eux; \
                 echo "Trying fallback mirror: $mirror"; \
                 echo "$mirror/latest-stable/main" > /etc/apk/repositories && \
                 echo "$mirror/latest-stable/community" >> /etc/apk/repositories && \
-                if apk update --no-cache 2>/dev/null && apk add --no-cache ca-certificates tzdata wget curl; then \
+                if apk update --no-cache 2>/dev/null && apk add --no-cache ca-certificates tzdata wget curl bash netstat-nat; then \
                     echo "✅ Packages installed successfully with fallback mirror: $mirror"; \
                     break; \
                 fi; \
