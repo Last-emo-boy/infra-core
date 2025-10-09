@@ -201,23 +201,14 @@ COPY --from=go-builder /app/bin/console /usr/local/bin/console
 # Copy frontend build
 COPY --from=node-builder /app/ui/dist /app/ui/dist
 
-# Create additional config directories
-RUN mkdir -p /usr/local/etc/infra-core/configs
-
 # Copy configuration files to multiple locations for compatibility
+# Note: scratch doesn't support mkdir, directories are created automatically by COPY
 COPY configs/ /etc/infra-core/configs/
 COPY configs/ /app/configs/
 COPY configs/ /usr/local/etc/infra-core/configs/
 
 # Set working directory
 WORKDIR /app
-
-# Verify configuration files exist and are accessible
-RUN ls -la /app/configs/ && \
-    ls -la /etc/infra-core/configs/ && \
-    test -f /app/configs/production.yaml && \
-    test -f /app/configs/development.yaml && \
-    echo "✅ Configuration files verified"
 
 # Set environment variables
 ENV INFRA_CORE_ENV=production
@@ -246,7 +237,7 @@ RUN set -eux; \
         echo "🚀 Using speed-tested optimal Alpine mirror: $ALPINE_MIRROR"; \
         echo "$ALPINE_MIRROR/latest-stable/main" > /etc/apk/repositories; \
         echo "$ALPINE_MIRROR/latest-stable/community" >> /etc/apk/repositories; \
-        if apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl; then \
+        if apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl bash netstat-nat; then \
             echo "✅ Packages installed successfully with optimal mirror: $ALPINE_MIRROR"; \
         else \
             echo "❌ Optimal mirror failed, falling back to multiple mirrors..."; \
@@ -272,7 +263,7 @@ RUN set -eux; \
         echo "Using Chinese Alpine mirror (region-based)"; \
         echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/latest-stable/main" > /etc/apk/repositories; \
         echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/latest-stable/community" >> /etc/apk/repositories; \
-        apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl; \
+        apk update --no-cache && apk add --no-cache ca-certificates tzdata wget curl bash netstat-nat; \
     else \
         echo "Using default mirror fallback strategy (prioritizing fast mirrors)"; \
         # Try Alpine mirrors one by one - prioritize fast Chinese mirrors first
@@ -290,7 +281,7 @@ RUN set -eux; \
             if apk update --no-cache 2>/dev/null; then \
                 echo "Successfully using mirror: $mirror"; \
                 # Install packages
-                if apk add --no-cache ca-certificates tzdata wget curl; then \
+                if apk add --no-cache ca-certificates tzdata wget curl bash netstat-nat; then \
                     echo "Packages installed successfully with mirror: $mirror"; \
                     break; \
                 else \
