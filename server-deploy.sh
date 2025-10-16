@@ -2301,9 +2301,41 @@ setup_interactive_config() {
     apply_custom_config
 }
 
+# Ensure ACME contact email is valid before enabling TLS automation
+validate_acme_email() {
+    local email="${CUSTOM_EMAIL:-}"
+    local ssl_enabled="${CUSTOM_SSL_ENABLED:-true}"
+
+    if [[ "${ssl_enabled}" != "true" ]]; then
+        return 0
+    fi
+
+    if [[ -z "${email}" ]]; then
+        log_error "ACME email cannot be empty when SSL is enabled."
+        log_info "Set CUSTOM_EMAIL or INFRA_CORE_ACME_EMAIL to a real mailbox before continuing."
+        exit 1
+    fi
+
+    if [[ "${email}" =~ @example\.com$ || "${email}" =~ @example\.org$ || "${email}" =~ @example\.net$ ]]; then
+        log_error "ACME email ${email} uses a reserved example domain rejected by Let's Encrypt."
+        log_info "Update CUSTOM_EMAIL/INFRA_CORE_ACME_EMAIL to something like admin@your-domain.com."
+        exit 1
+    fi
+
+    if ! [[ "${email}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+        log_error "ACME email ${email} is not a valid email format."
+        log_info "Provide a syntactically correct address (e.g. support@company.com)."
+        exit 1
+    fi
+
+    return 0
+}
+
 # Apply custom configuration
 apply_custom_config() {
     log_info "📝 Applying custom configuration..."
+
+    validate_acme_email
     
     # Create custom production config
     local config_file="$DEPLOY_DIR/current/configs/production.yaml"
@@ -2436,6 +2468,8 @@ setup_default_config() {
     CUSTOM_BACKUP_ENABLED="${CUSTOM_BACKUP_ENABLED:-true}"
     CUSTOM_BACKUP_RETENTION="${CUSTOM_BACKUP_RETENTION:-30}"
     
+    validate_acme_email
+
     # Generate JWT secret if not provided
     if [[ -z "${JWT_SECRET:-}" ]]; then
         JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p)
@@ -2524,6 +2558,8 @@ setup_environment_config() {
     if [[ -z "$CUSTOM_DOMAIN" ]]; then
         setup_interactive_config
     fi
+
+    validate_acme_email
     
     local config_source="$DEPLOY_DIR/current/configs/$ENVIRONMENT.yaml"
     local config_target="/etc/infra-core/config.yaml"

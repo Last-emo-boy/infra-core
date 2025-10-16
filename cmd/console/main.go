@@ -162,6 +162,7 @@ func main() {
 		{
 			services.POST("/", serviceHandler.CreateService)
 			services.GET("/", serviceHandler.ListServices)
+			services.GET("/summary", serviceHandler.GetServiceSummary)
 			services.GET("/:id", serviceHandler.GetService)
 			services.PUT("/:id", serviceHandler.UpdateService)
 			services.DELETE("/:id", serviceHandler.DeleteService)

@@ -92,4 +92,18 @@ for service in orchestrator probe snap; do
 done
 
 echo
+log_info "🪵 Log Inspection Shortcuts:"
+if systemctl list-units --type=service 2>/dev/null | grep -q "infra-core-gate"; then
+    log_info "  Gate: sudo journalctl -u infra-core-gate -f"
+    log_info "  Console: sudo journalctl -u infra-core-console -f"
+    log_info "  Orchestrator: sudo journalctl -u infra-core-orchestrator -f"
+    log_info "  Probe: sudo journalctl -u infra-core-probe -f"
+    log_info "  Snap: sudo journalctl -u infra-core-snap -f"
+else
+    deploy_root="${DEPLOY_ROOT:-/opt/infra-core/current}"
+    log_info "  Docker Compose: (cd ${deploy_root} && docker compose logs gate console orchestrator probe snap -f)"
+    log_info "  Individual logs under /var/log/infra-core/{gate,console,orchestrator,probe,snap}.log"
+fi
+
+echo
 log_info "✅ Service check completed"

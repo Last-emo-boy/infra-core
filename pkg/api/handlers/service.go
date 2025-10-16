@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"net/http"
+	"sort"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -257,4 +259,109 @@ func (h *ServiceHandler) GetServiceLogs(c *gin.Context) {
 		"tail":  tail,
 		"since": since,
 	})
+}
+
+// ServiceSummaryResponse represents aggregated service information
+type ServiceSummaryResponse struct {
+	Counts      ServiceStatusCounts `json:"counts"`
+	Recent      []*database.Service `json:"recent"`
+	LastUpdated *time.Time          `json:"last_updated,omitempty"`
+	GeneratedAt time.Time           `json:"generated_at"`
+}
+
+// ServiceStatusCounts groups service counts by status
+type ServiceStatusCounts struct {
+	Total   int `json:"total"`
+	Running int `json:"running"`
+	Stopped int `json:"stopped"`
+	Error   int `json:"error"`
+}
+
+// GetServiceSummary returns aggregated information about services
+func (h *ServiceHandler) GetServiceSummary(c *gin.Context) {
+	repo := h.db.ServiceRepository()
+	services, err := repo.List()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch services"})
+		return
+	}
+
+	counts := ServiceStatusCounts{}
+	counts.Total = len(services)
+
+	for _, service := range services {
+		switch service.Status {
+		case "running":
+			counts.Running++
+		case "stopped":
+			counts.Stopped++
+		case "error":
+			counts.Error++
+		}
+
+		if service.Environment == nil {
+			service.Environment = make(map[string]string)
+		}
+		if service.Command == nil {
+			service.Command = []string{}
+		}
+		if service.Args == nil {
+			service.Args = []string{}
+		}
+	}
+
+	sorted := make([]*database.Service, len(services))
+	copy(sorted, services)
+
+	sort.Slice(sorted, func(i, j int) bool {
+		left := sorted[i].UpdatedAt
+		right := sorted[j].UpdatedAt
+
+		if left.IsZero() {
+			left = sorted[i].CreatedAt
+		}
+		if right.IsZero() {
+			right = sorted[j].CreatedAt
+		}
+
+		if left.Equal(right) {
+			leftCreated := sorted[i].CreatedAt
+			rightCreated := sorted[j].CreatedAt
+
+			if leftCreated.Equal(rightCreated) {
+				return sorted[i].ID < sorted[j].ID
+			}
+
+			return leftCreated.After(rightCreated)
+		}
+
+		return left.After(right)
+	})
+
+	summary := ServiceSummaryResponse{
+		Counts:      counts,
+		Recent:      []*database.Service{},
+		GeneratedAt: time.Now().UTC(),
+	}
+
+	if len(sorted) > 0 {
+		limit := 5
+		if len(sorted) < limit {
+			limit = len(sorted)
+		}
+
+		summary.Recent = sorted[:limit]
+
+		mostRecent := sorted[0].UpdatedAt
+		if mostRecent.IsZero() {
+			mostRecent = sorted[0].CreatedAt
+		}
+
+		if !mostRecent.IsZero() {
+			lastUpdated := mostRecent
+			summary.LastUpdated = &lastUpdated
+		}
+	}
+
+	c.JSON(http.StatusOK, summary)
 }

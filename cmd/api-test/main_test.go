@@ -96,6 +96,7 @@ func TestHTTPClientConfiguration(t *testing.T) {
 	// Test HTTP client default configuration
 	client := &http.Client{
 		Timeout: 30 * time.Second,
+		Transport: http.DefaultTransport,
 	}
 	
 	assert.Equal(t, 30*time.Second, client.Timeout)

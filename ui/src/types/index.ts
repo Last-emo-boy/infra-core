@@ -18,16 +18,31 @@ export interface LoginResponse {
 }
 
 export interface Service {
-  id: number;
+  id: string;
   name: string;
   image: string;
   port: number;
-  environment: Record<string, string>;
+  environment?: Record<string, string>;
   command?: string[];
   args?: string[];
+  replicas?: number;
   status: 'running' | 'stopped' | 'error';
   created_at: string;
   updated_at: string;
+}
+
+export interface ServiceStatusCounts {
+  total: number;
+  running: number;
+  stopped: number;
+  error: number;
+}
+
+export interface ServiceSummary {
+  counts: ServiceStatusCounts;
+  recent: Service[];
+  last_updated?: string;
+  generated_at: string;
 }
 
 // SSO and Portal Types

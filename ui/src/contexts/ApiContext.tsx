@@ -6,7 +6,8 @@ import type {
   User, 
   LoginRequest, 
   LoginResponse, 
-  Service, 
+  Service,
+  ServiceSummary,
   SystemInfo, 
   DashboardData,
   RegisteredService,
@@ -32,13 +33,14 @@ export interface ApiContextType {
   };
   services: {
     list: () => Promise<Service[]>;
-    get: (id: number) => Promise<Service>;
+    get: (id: string) => Promise<Service>;
     create: (service: Omit<Service, 'id' | 'status' | 'created_at' | 'updated_at'>) => Promise<Service>;
-    update: (id: number, service: Partial<Service>) => Promise<Service>;
-    delete: (id: number) => Promise<void>;
-    start: (id: number) => Promise<void>;
-    stop: (id: number) => Promise<void>;
-    getLogs: (id: number) => Promise<string>;
+    update: (id: string, service: Partial<Service>) => Promise<Service>;
+    delete: (id: string) => Promise<void>;
+    start: (id: string) => Promise<void>;
+    stop: (id: string) => Promise<void>;
+    getLogs: (id: string) => Promise<string[]>;
+    summary: () => Promise<ServiceSummary>;
   };
   sso: {
     listServices: () => Promise<RegisteredService[]>;
@@ -73,7 +75,7 @@ interface ApiProviderProps {
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8082';
 
-export const ApiProvider: React.FC<ApiProviderProps> = ({ children }) => {
+export const ApiProvider: React.FC<ApiProviderProps> = ({ children }: ApiProviderProps) => {
   // Create axios instance
   const api = axios.create({
     baseURL: API_BASE_URL,
@@ -104,6 +106,13 @@ export const ApiProvider: React.FC<ApiProviderProps> = ({ children }) => {
       return Promise.reject(error);
     }
   );
+
+  const normalizeService = (service: Service): Service => ({
+    ...service,
+    environment: service.environment ?? {},
+    command: service.command ?? [],
+    args: service.args ?? [],
+  });
 
   const apiMethods: ApiContextType = {
     api,
@@ -136,33 +145,46 @@ export const ApiProvider: React.FC<ApiProviderProps> = ({ children }) => {
     },
     services: {
       list: async (): Promise<Service[]> => {
-        const response = await api.get<Service[]>('/api/v1/services');
-        return response.data;
+        const response = await api.get<{ services: Service[] }>('/api/v1/services');
+        return (response.data.services ?? []).map(normalizeService);
       },
-      get: async (id: number): Promise<Service> => {
-        const response = await api.get<Service>(`/api/v1/services/${id}`);
-        return response.data;
+      get: async (id: string): Promise<Service> => {
+        const response = await api.get<{ service: Service }>(`/api/v1/services/${id}`);
+        return normalizeService(response.data.service);
       },
       create: async (service: Omit<Service, 'id' | 'status' | 'created_at' | 'updated_at'>): Promise<Service> => {
-        const response = await api.post<Service>('/api/v1/services', service);
-        return response.data;
+        const response = await api.post<{ service: Service }>(
+          '/api/v1/services',
+          service
+        );
+        return normalizeService(response.data.service);
       },
-      update: async (id: number, service: Partial<Service>): Promise<Service> => {
-        const response = await api.put<Service>(`/api/v1/services/${id}`, service);
-        return response.data;
+      update: async (id: string, service: Partial<Service>): Promise<Service> => {
+        const response = await api.put<{ service: Service }>(
+          `/api/v1/services/${id}`,
+          service
+        );
+        return normalizeService(response.data.service);
       },
-      delete: async (id: number): Promise<void> => {
+      delete: async (id: string): Promise<void> => {
         await api.delete(`/api/v1/services/${id}`);
       },
-      start: async (id: number): Promise<void> => {
+      start: async (id: string): Promise<void> => {
         await api.post(`/api/v1/services/${id}/start`);
       },
-      stop: async (id: number): Promise<void> => {
+      stop: async (id: string): Promise<void> => {
         await api.post(`/api/v1/services/${id}/stop`);
       },
-      getLogs: async (id: number): Promise<string> => {
-        const response = await api.get<string>(`/api/v1/services/${id}/logs`);
-        return response.data;
+      getLogs: async (id: string): Promise<string[]> => {
+        const response = await api.get<{ logs: string[] }>(`/api/v1/services/${id}/logs`);
+        return response.data.logs ?? [];
+      },
+      summary: async (): Promise<ServiceSummary> => {
+        const response = await api.get<ServiceSummary>('/api/v1/services/summary');
+        return {
+          ...response.data,
+          recent: (response.data.recent ?? []).map(normalizeService),
+        };
       },
     },
     sso: {
