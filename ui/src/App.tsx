@@ -6,8 +6,11 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Services from './pages/Services';
 import System from './pages/System';
+import Portal from './pages/Portal';
+import SSOAdmin from './pages/SSOAdmin';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
+import RoleGuard from './components/RoleGuard';
 
 const App: React.FC = () => {
   return (
@@ -25,14 +28,23 @@ const App: React.FC = () => {
                   <Layout />
                 </ProtectedRoute>
               }>
-                <Route index element={<Navigate to="/dashboard" replace />} />
+                <Route index element={<Navigate to="/portal" replace />} />
+                <Route path="portal" element={<Portal />} />
                 <Route path="dashboard" element={<Dashboard />} />
                 <Route path="services" element={<Services />} />
                 <Route path="system" element={<System />} />
+                <Route
+                  path="sso"
+                  element={
+                    <RoleGuard roles={["admin"]}>
+                      <SSOAdmin />
+                    </RoleGuard>
+                  }
+                />
               </Route>
               
               {/* Catch all */}
-              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              <Route path="*" element={<Navigate to="/portal" replace />} />
             </Routes>
           </div>
         </Router>

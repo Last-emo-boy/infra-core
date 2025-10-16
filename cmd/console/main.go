@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -65,16 +67,37 @@ func main() {
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.CORSMiddleware())
 
-	// Root health check
-	r.GET("/", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"service":     "infra-core-console",
-			"version":     "1.0.0",
-			"status":      "healthy",
-			"environment": environment,
-			"time":        time.Now().UTC().Format(time.RFC3339),
+	// Static UI support
+	uiDistDir := "/app/ui/dist"
+	uiIndexFile := filepath.Join(uiDistDir, "index.html")
+	uiAvailable := false
+
+	if info, err := os.Stat(uiIndexFile); err == nil && !info.IsDir() {
+		uiAvailable = true
+		log.Printf("🖥️  UI assets detected at %s", uiDistDir)
+
+		// Serve static assets (JS/CSS/etc.)
+		assetsDir := filepath.Join(uiDistDir, "assets")
+		if stat, err := os.Stat(assetsDir); err == nil && stat.IsDir() {
+			r.Static("/assets", assetsDir)
+		}
+
+		// Serve index for root requests
+		r.GET("/", func(c *gin.Context) {
+			c.File(uiIndexFile)
 		})
-	})
+	} else {
+		// Root health check (legacy JSON response)
+		r.GET("/", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"service":     "infra-core-console",
+				"version":     "1.0.0",
+				"status":      "healthy",
+				"environment": environment,
+				"time":        time.Now().UTC().Format(time.RFC3339),
+			})
+		})
+	}
 
 	// Public routes
 	api := r.Group("/api/v1")
@@ -88,6 +111,31 @@ func main() {
 
 		// Health check endpoint
 		api.GET("/health", systemHandler.HealthCheck)
+	}
+
+	// SPA fallback for non-API routes when UI is present
+	if uiAvailable {
+		r.NoRoute(func(c *gin.Context) {
+			path := c.Request.URL.Path
+			if strings.HasPrefix(path, "/api/") {
+				c.JSON(http.StatusNotFound, gin.H{
+					"error":   "endpoint_not_found",
+					"path":    path,
+					"message": "The requested API route was not found",
+				})
+				return
+			}
+
+			c.File(uiIndexFile)
+		})
+	} else {
+		r.NoRoute(func(c *gin.Context) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":   "endpoint_not_found",
+				"path":    c.Request.URL.Path,
+				"message": "The requested route was not found",
+			})
+		})
 	}
 
 	// Protected routes
@@ -131,7 +179,7 @@ func main() {
 			sso.GET("/services/:id", ssoHandler.GetService)
 			sso.GET("/services/:id/health", ssoHandler.GetServiceHealth)
 			sso.GET("/services/:id/health/history", ssoHandler.GetServiceHealthHistory)
-			
+
 			// SSO authentication
 			sso.POST("/login", ssoHandler.InitiateSSO)
 			sso.GET("/validate", ssoHandler.ValidateSSO)
@@ -141,6 +189,7 @@ func main() {
 			adminSSO.Use(middleware.RequireRole(authService, "admin"))
 			{
 				adminSSO.POST("/services", ssoHandler.RegisterService)
+				adminSSO.GET("/services/:id/permissions", ssoHandler.ListServicePermissions)
 				adminSSO.PUT("/services/:id", ssoHandler.UpdateService)
 				adminSSO.DELETE("/services/:id", ssoHandler.DeleteService)
 				adminSSO.POST("/permissions/:user_id/:service_id/grant", ssoHandler.GrantServiceAccess)

@@ -1,22 +1,38 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Server, 
   Settings, 
   LogOut, 
-  User 
+  User,
+  PanelsTopLeft,
+  ShieldCheck
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
 const Layout: React.FC = () => {
   const { user, logout } = useAuth();
+  type NavigationItem = {
+    name: string;
+    href: string;
+    icon: React.ComponentType<{ className?: string }>;
+  };
 
-  const navigation = [
-    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-    { name: 'Services', href: '/services', icon: Server },
-    { name: 'System', href: '/system', icon: Settings },
-  ];
+  const navigation = useMemo<NavigationItem[]>(() => {
+    const items: NavigationItem[] = [
+      { name: 'Portal', href: '/portal', icon: PanelsTopLeft },
+      { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+      { name: 'Services', href: '/services', icon: Server },
+      { name: 'System', href: '/system', icon: Settings },
+    ];
+
+    if (user?.role === 'admin') {
+      items.push({ name: 'SSO Admin', href: '/sso', icon: ShieldCheck });
+    }
+
+    return items;
+  }, [user]);
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -29,11 +45,11 @@ const Layout: React.FC = () => {
         </div>
         
         <nav className="mt-6">
-          {navigation.map((item) => (
+          {navigation.map((item: NavigationItem) => (
             <NavLink
               key={item.name}
               to={item.href}
-              className={({ isActive }) =>
+              className={({ isActive }: { isActive: boolean }) =>
                 `group flex items-center px-6 py-3 text-sm font-medium transition-colors ${
                   isActive
                     ? 'bg-primary-50 border-r-2 border-primary-500 text-primary-700'

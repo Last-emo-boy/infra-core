@@ -74,6 +74,19 @@ type SSOLoginResponse struct {
 	ExpiresAt   int64  `json:"expires_at"`
 }
 
+// ServicePermissionResponse represents permission details for a user/service pair
+type ServicePermissionResponse struct {
+	UserID            int        `json:"user_id"`
+	Username          string     `json:"username"`
+	Email             string     `json:"email"`
+	Role              string     `json:"role"`
+	CanAccess         bool       `json:"can_access"`
+	GrantedBy         *int       `json:"granted_by"`
+	GrantedByUsername *string    `json:"granted_by_username,omitempty"`
+	GrantedAt         *time.Time `json:"granted_at"`
+	ExpiresAt         *time.Time `json:"expires_at"`
+}
+
 // RegisterService registers a new service with the SSO gateway
 func (h *SSOHandler) RegisterService(c *gin.Context) {
 	var req RegisterServiceRequest
@@ -139,7 +152,7 @@ func (h *SSOHandler) ListUserServices(c *gin.Context) {
 	}
 
 	userRole, _ := c.Get("role")
-	
+
 	repo := h.db.UserServicePermissionRepository()
 	services, err := repo.ListUserServices(userID.(int))
 	if err != nil {
@@ -168,7 +181,7 @@ func (h *SSOHandler) ListUserServices(c *gin.Context) {
 // GetService gets a specific service by ID
 func (h *SSOHandler) GetService(c *gin.Context) {
 	serviceID := c.Param("id")
-	
+
 	repo := h.db.RegisteredServiceRepository()
 	service, err := repo.GetByID(serviceID)
 	if err != nil {
@@ -184,7 +197,7 @@ func (h *SSOHandler) GetService(c *gin.Context) {
 // UpdateService updates a registered service
 func (h *SSOHandler) UpdateService(c *gin.Context) {
 	serviceID := c.Param("id")
-	
+
 	var req RegisterServiceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -222,7 +235,7 @@ func (h *SSOHandler) UpdateService(c *gin.Context) {
 // DeleteService deletes a registered service
 func (h *SSOHandler) DeleteService(c *gin.Context) {
 	serviceID := c.Param("id")
-	
+
 	repo := h.db.RegisteredServiceRepository()
 	if err := repo.Delete(serviceID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete service"})
@@ -333,6 +346,70 @@ func (h *SSOHandler) ValidateSSO(c *gin.Context) {
 	})
 }
 
+// ListServicePermissions lists all user permissions for a service
+func (h *SSOHandler) ListServicePermissions(c *gin.Context) {
+	serviceID := c.Param("id")
+
+	serviceRepo := h.db.RegisteredServiceRepository()
+	if _, err := serviceRepo.GetByID(serviceID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found"})
+		return
+	}
+
+	permRepo := h.db.UserServicePermissionRepository()
+	permissions, err := permRepo.ListServicePermissions(serviceID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list service permissions"})
+		return
+	}
+
+	// Collect grantor usernames to enrich response without repeated lookups
+	grantorIDs := make(map[int]struct{})
+	for _, perm := range permissions {
+		if perm.GrantedBy != nil {
+			grantorIDs[*perm.GrantedBy] = struct{}{}
+		}
+	}
+
+	grantorUsernames := make(map[int]string)
+	if len(grantorIDs) > 0 {
+		userRepo := h.db.UserRepository()
+		for userID := range grantorIDs {
+			if user, err := userRepo.GetByID(userID); err == nil {
+				grantorUsernames[userID] = user.Username
+			}
+		}
+	}
+
+	responses := make([]ServicePermissionResponse, 0, len(permissions))
+	for _, perm := range permissions {
+		response := ServicePermissionResponse{
+			UserID:    perm.UserID,
+			Username:  perm.Username,
+			Email:     perm.Email,
+			Role:      perm.Role,
+			CanAccess: perm.CanAccess,
+			GrantedBy: perm.GrantedBy,
+			GrantedAt: perm.GrantedAt,
+			ExpiresAt: perm.ExpiresAt,
+		}
+
+		if perm.GrantedBy != nil {
+			if username, ok := grantorUsernames[*perm.GrantedBy]; ok {
+				response.GrantedByUsername = &username
+			}
+		}
+
+		responses = append(responses, response)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"service_id":  serviceID,
+		"permissions": responses,
+		"count":       len(responses),
+	})
+}
+
 // GrantServiceAccess grants a user access to a service
 func (h *SSOHandler) GrantServiceAccess(c *gin.Context) {
 	userIDStr := c.Param("user_id")
@@ -345,7 +422,7 @@ func (h *SSOHandler) GrantServiceAccess(c *gin.Context) {
 	}
 
 	grantedBy, _ := c.Get("user_id")
-	
+
 	repo := h.db.UserServicePermissionRepository()
 	if err := repo.Grant(userID, serviceID, grantedBy.(int), nil); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to grant service access"})
@@ -378,7 +455,7 @@ func (h *SSOHandler) RevokeServiceAccess(c *gin.Context) {
 // GetServiceHealth gets the health status of a service
 func (h *SSOHandler) GetServiceHealth(c *gin.Context) {
 	serviceID := c.Param("id")
-	
+
 	healthRepo := h.db.ServiceHealthCheckRepository()
 	healthCheck, err := healthRepo.GetLatest(serviceID)
 	if err != nil {

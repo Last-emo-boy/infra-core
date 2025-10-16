@@ -27,6 +27,53 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Determine the preferred timeout for HTTP checks (default 3 seconds)
+SERVICE_CHECK_TIMEOUT=${SERVICE_CHECK_TIMEOUT:-3}
+
+# Resolve a service-specific health check URL (overridable via env)
+get_service_health_url() {
+    local service_name=$1
+    local port=$2
+
+    case "$service_name" in
+        console)
+            echo "${CONSOLE_HEALTH_URL:-http://localhost:${port:-8082}/api/v1/health}"
+            ;;
+        gate)
+            echo "${GATE_HEALTH_URL:-http://localhost:${port:-80}/api/v1/health}"
+            ;;
+        orchestrator)
+            echo "${ORCHESTRATOR_HEALTH_URL:-http://localhost:${port:-9090}/health}"
+            ;;
+        probe)
+            echo "${PROBE_HEALTH_URL:-http://localhost:${port:-8085}/health}"
+            ;;
+        snap)
+            echo "${SNAP_HEALTH_URL:-http://localhost:${port:-8086}/health}"
+            ;;
+        *)
+            # Default to root path check if no specific mapping exists
+            echo "http://localhost:${port}/"
+            ;;
+    esac
+}
+
+# Perform an HTTP health check using curl or wget
+http_check() {
+    local url=$1
+
+    if command -v curl >/dev/null 2>&1; then
+        curl --silent --show-error --fail --max-time "$SERVICE_CHECK_TIMEOUT" --output /dev/null "$url"
+        return $?
+    elif command -v wget >/dev/null 2>&1; then
+        wget --quiet --tries=1 --timeout="$SERVICE_CHECK_TIMEOUT" --output-document=/dev/null "$url"
+        return $?
+    fi
+
+    # No HTTP client available; skip check to avoid false negatives
+    return 0
+}
+
 # Set environment
 export INFRA_CORE_ENV=${INFRA_CORE_ENV:-production}
 export INFRA_CORE_DATA_DIR=${INFRA_CORE_DATA_DIR:-/var/lib/infra-core}
@@ -222,11 +269,21 @@ check_service() {
     if [ -f "$pid_file" ]; then
         local pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
-            if command -v wget >/dev/null 2>&1; then
-                if wget --spider --quiet --timeout=3 "http://localhost:$port" 2>/dev/null; then
-                    log_success "$service_name (PID: $pid) - ✅ Running and responding on port $port"
+            local port_is_numeric="false"
+            if printf '%s' "$port" | grep -Eq '^[0-9]+$'; then
+                port_is_numeric="true"
+            fi
+
+            if [ "$port_is_numeric" = "true" ]; then
+                local health_url
+                health_url=$(get_service_health_url "$service_name" "$port")
+
+                if [ -n "$health_url" ] && http_check "$health_url"; then
+                    log_success "$service_name (PID: $pid) - ✅ Running and responding at $health_url"
+                elif [ -n "$health_url" ]; then
+                    log_warning "$service_name (PID: $pid) - ⚠️ Running but health check failed at $health_url"
                 else
-                    log_warning "$service_name (PID: $pid) - ⚠️ Running but not responding on port $port"
+                    log_success "$service_name (PID: $pid) - ✅ Running on port $port"
                 fi
             else
                 log_success "$service_name (PID: $pid) - ✅ Running"

@@ -887,6 +887,7 @@ setup_directories() {
         "$BACKUP_DIR" 
         "/var/log/infra-core"
         "/etc/infra-core"
+        "/etc/infra-core/certs"
         "/var/lib/infra-core"
     )
     
@@ -933,6 +934,12 @@ setup_directories() {
             log_warning "Could not set ownership for $dir (user may not exist yet)"
         fi
         
+        # Tighten permissions for sensitive directories
+        if [[ "$dir" == "/etc/infra-core/certs" ]]; then
+            chmod 770 "$dir" 2>/dev/null || log_warning "Could not set permissions for $dir"
+            continue
+        fi
+
         if ! chmod 755 "$dir" 2>/dev/null; then
             log_warning "Could not set permissions for $dir"
         fi
@@ -2017,6 +2024,8 @@ deploy_docker() {
     log_step "Deploying with Docker..."
     
     cd "$DEPLOY_DIR/current"
+
+    prepare_certificate_directories
     
     # Login to GitHub Container Registry if credentials available
     if [[ -n "${GITHUB_TOKEN:-}" ]] && [[ -n "${GITHUB_ACTOR:-}" ]]; then
@@ -2055,6 +2064,8 @@ deploy_binary() {
     log_step "Deploying with binaries..."
     
     cd "$DEPLOY_DIR/current"
+
+    prepare_certificate_directories
     
     # Install Go if not present
     if ! command -v go &> /dev/null; then
@@ -2616,6 +2627,9 @@ validate_configuration_files() {
     
     # Ensure configuration files are accessible in Docker
     ensure_docker_config_access
+
+    # Prepare writable certificate directories for ACME
+    prepare_certificate_directories
     
     log_success "Configuration validation completed"
 }
@@ -2820,6 +2834,48 @@ ensure_docker_config_access() {
     fi
     
     log_success "Docker configuration access configured"
+}
+
+# Ensure certificate directories are writable for containerized services
+prepare_certificate_directories() {
+    log_info "🔐 Preparing certificate directories..."
+
+    local host_cert_dir="$DEPLOY_DIR/current/certs"
+
+    if [[ ! -d "$host_cert_dir" ]]; then
+        mkdir -p "$host_cert_dir" 2>/dev/null || {
+            log_error "Failed to create certificate directory: $host_cert_dir"
+            return 1
+        }
+        log_success "Created certificate workspace: $host_cert_dir"
+    fi
+
+    # Ensure host certificates directory has restrictive permissions
+    if ! chmod 770 "$host_cert_dir" 2>/dev/null; then
+        log_warning "Could not set permissions on $host_cert_dir"
+    fi
+
+    # Align ownership with container user (UID/GID 1001) and fall back to service user if needed
+    if ! chown 1001:1001 "$host_cert_dir" 2>/dev/null; then
+        chown "$SERVICE_USER:$SERVICE_USER" "$host_cert_dir" 2>/dev/null || log_warning "Could not adjust ownership for $host_cert_dir"
+    fi
+
+    touch "$host_cert_dir/.keep" 2>/dev/null || true
+
+    # Mirror permissions on host-level ACME cache directory
+    local system_cert_dir="/etc/infra-core/certs"
+    if [[ ! -d "$system_cert_dir" ]]; then
+        mkdir -p "$system_cert_dir" 2>/dev/null || log_warning "Could not create system certificate directory: $system_cert_dir"
+    fi
+
+    if [[ -d "$system_cert_dir" ]]; then
+        chmod 770 "$system_cert_dir" 2>/dev/null || log_warning "Could not set permissions on $system_cert_dir"
+        if ! chown 1001:1001 "$system_cert_dir" 2>/dev/null; then
+            chown "$SERVICE_USER:$SERVICE_USER" "$system_cert_dir" 2>/dev/null || log_warning "Could not adjust ownership for $system_cert_dir"
+        fi
+    fi
+
+    log_success "Certificate directories ready"
 }
 
 # Add configuration mount to docker-compose.yml

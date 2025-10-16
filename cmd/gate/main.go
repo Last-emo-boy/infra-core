@@ -54,17 +54,6 @@ func main() {
 		}
 	}
 
-	// Add some example routes for testing
-	err = r.AddRoute(&router.Route{
-		ID:         "hello",
-		Host:       "",
-		PathPrefix: "/hello",
-		Upstream:   "http://127.0.0.1:8081",
-	})
-	if err != nil {
-		log.Printf("Warning: Failed to add hello route: %v", err)
-	}
-
 	err = r.AddRoute(&router.Route{
 		ID:         "console",
 		Host:       "",
@@ -75,23 +64,12 @@ func main() {
 		log.Printf("Warning: Failed to add console route: %v", err)
 	}
 
-	// Add hello service route for testing
-	err = r.AddRoute(&router.Route{
-		ID:         "hello",
-		Host:       "",
-		PathPrefix: "/hello",
-		Upstream:   "http://127.0.0.1:8081",
-	})
-	if err != nil {
-		log.Printf("Warning: Failed to add hello route: %v", err)
-	}
-
 	// Add default route to hello service
 	err = r.AddRoute(&router.Route{
 		ID:         "default",
 		Host:       "",
 		PathPrefix: "/",
-		Upstream:   "http://127.0.0.1:8081",
+		Upstream:   fmt.Sprintf("http://127.0.0.1:%d", cfg.Console.Port),
 	})
 	if err != nil {
 		log.Printf("Warning: Failed to add default route: %v", err)

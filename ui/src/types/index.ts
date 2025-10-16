@@ -95,6 +95,18 @@ export interface UserServicePermission {
   expires_at?: string;
 }
 
+export interface ServicePermissionRecord {
+  user_id: number;
+  username: string;
+  email: string;
+  role: string;
+  can_access: boolean;
+  granted_by: number | null;
+  granted_by_username?: string | null;
+  granted_at?: string | null;
+  expires_at?: string | null;
+}
+
 export interface SystemInfo {
   version: string;
   environment: string;

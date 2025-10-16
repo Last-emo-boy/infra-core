@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -109,7 +110,7 @@ func (r *RegisteredServiceRepository) Create(service *RegisteredService) error {
 	if service.ID == "" {
 		service.ID = uuid.New().String()
 	}
-	
+
 	query := `
 		INSERT INTO registered_services (id, name, display_name, description, service_url, callback_url, icon, category, is_public, required_role, status, health_url)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -212,7 +213,7 @@ func (r *RegisteredServiceRepository) UpdateHealthStatus(serviceID string, isHea
 		now := time.Now()
 		lastHealthy = &now
 	}
-	
+
 	query := `UPDATE registered_services SET last_healthy = ? WHERE id = ?`
 	_, err := r.db.Exec(query, lastHealthy, serviceID)
 	if err != nil {
@@ -248,7 +249,7 @@ func (r *SSOSessionRepository) Create(session *SSOSession) error {
 	if session.ID == "" {
 		session.ID = uuid.New().String()
 	}
-	
+
 	query := `
 		INSERT INTO sso_sessions (id, user_id, token_hash, expires_at, ip_address, user_agent, is_active)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -397,6 +398,66 @@ func (r *UserServicePermissionRepository) ListUserServices(userID int) ([]*Regis
 	}
 
 	return services, nil
+}
+
+// ListServicePermissions lists all users and their access status for a service
+func (r *UserServicePermissionRepository) ListServicePermissions(serviceID string) ([]*ServicePermissionDetail, error) {
+	query := `
+		SELECT u.id AS user_id, u.username, u.email, u.role,
+		       COALESCE(usp.can_access, FALSE) AS can_access,
+		       usp.granted_by, usp.granted_at, usp.expires_at
+		FROM users u
+		LEFT JOIN user_service_permissions usp
+		  ON usp.user_id = u.id AND usp.service_id = ?
+		ORDER BY u.username
+	`
+	rows, err := r.db.Query(query, serviceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list service permissions: %w", err)
+	}
+	defer rows.Close()
+
+	var permissions []*ServicePermissionDetail
+	for rows.Next() {
+		var detail ServicePermissionDetail
+		var grantedBy sql.NullInt64
+		var grantedAt sql.NullTime
+		var expiresAt sql.NullTime
+
+		if err := rows.Scan(
+			&detail.UserID,
+			&detail.Username,
+			&detail.Email,
+			&detail.Role,
+			&detail.CanAccess,
+			&grantedBy,
+			&grantedAt,
+			&expiresAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan service permission: %w", err)
+		}
+
+		if grantedBy.Valid {
+			value := int(grantedBy.Int64)
+			detail.GrantedBy = &value
+		}
+		if grantedAt.Valid {
+			value := grantedAt.Time
+			detail.GrantedAt = &value
+		}
+		if expiresAt.Valid {
+			value := expiresAt.Time
+			detail.ExpiresAt = &value
+		}
+
+		permissions = append(permissions, &detail)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate service permissions: %w", err)
+	}
+
+	return permissions, nil
 }
 
 // ServiceHealthCheckRepository provides database operations for service health checks

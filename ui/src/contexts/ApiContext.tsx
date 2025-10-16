@@ -14,7 +14,8 @@ import type {
   SSOLoginRequest,
   SSOLoginResponse,
   PortalDashboard,
-  ServiceHealthCheck
+  ServiceHealthCheck,
+  ServicePermissionRecord
 } from '../types';
 
 export interface ApiContextType {
@@ -51,6 +52,7 @@ export interface ApiContextType {
     getServiceHealthHistory: (id: string, limit?: number) => Promise<ServiceHealthCheck[]>;
     grantServiceAccess: (userId: number, serviceId: string) => Promise<void>;
     revokeServiceAccess: (userId: number, serviceId: string) => Promise<void>;
+    getServicePermissions: (serviceId: string) => Promise<ServicePermissionRecord[]>;
   };
   portal: {
     getDashboard: () => Promise<PortalDashboard>;
@@ -204,6 +206,10 @@ export const ApiProvider: React.FC<ApiProviderProps> = ({ children }) => {
       },
       revokeServiceAccess: async (userId: number, serviceId: string): Promise<void> => {
         await api.post(`/api/v1/sso/permissions/${userId}/${serviceId}/revoke`);
+      },
+      getServicePermissions: async (serviceId: string): Promise<ServicePermissionRecord[]> => {
+        const response = await api.get<{ permissions: ServicePermissionRecord[] }>(`/api/v1/sso/services/${serviceId}/permissions`);
+        return response.data.permissions;
       },
     },
     portal: {

@@ -348,7 +348,7 @@ EXPOSE 80 443 8082
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8082/api/v1/health || exit 1
+    CMD curl --fail --silent --show-error --max-time 5 http://localhost:8082/api/v1/health >/dev/null || exit 1
 
 # Default command runs all services
 CMD ["/usr/local/bin/start-services.sh"]
