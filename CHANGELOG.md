@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 
+## [0.2.0-beta.12](https://github.com/Last-emo-boy/infra-core/compare/v0.2.0-beta.11...v0.2.0-beta.12) (2025-10-17)
+
 ## [0.2.0-beta.11](https://github.com/Last-emo-boy/infra-core/compare/v0.2.0-beta.10...v0.2.0-beta.11) (2025-10-16)
 
 
